@@ -123,7 +123,7 @@ export default function AuthPage() {
               <div className="auth-signed-in">
                 <div className="auth-success-mark">✓</div>
                 <div className="auth-card-eyebrow">ACCOUNT READY</div>
-                <h2>You're signed in.</h2>
+                <h2>You&apos;re signed in.</h2>
                 <p className="auth-card-description">Your Discoverly account is connected as:</p>
                 <div className="auth-user-email">{userEmail}</div>
                 <Link href="/" className="auth-submit-button auth-home-button">Explore Discoverly <span>→</span></Link>

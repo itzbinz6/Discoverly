@@ -78,7 +78,7 @@ export default function OnboardingPage() {
     }
 
     loadPreferences();
-  }, [router, supabase]);
+  }, [router]);
 
   // Add or remove a topic from the selected list.
   function toggleTopic(
@@ -186,14 +186,14 @@ export default function OnboardingPage() {
           <div style={styles.progressFill} />
         </div>
 
-        <p style={styles.step}>LET'S PERSONALIZE YOUR EXPERIENCE</p>
+        <p style={styles.step}>LET&apos;S PERSONALIZE YOUR EXPERIENCE</p>
 
         <h1 style={styles.heading}>
           What do you <span>love watching?</span>
         </h1>
 
         <p style={styles.description}>
-          Choose the topics you're interested in. We'll use your choices
+          Choose the topics you&apos;re interested in. We&apos;ll use your choices
           to help make your video discovery experience more relevant.
         </p>
 
@@ -204,7 +204,7 @@ export default function OnboardingPage() {
           </div>
 
           <p style={styles.helper}>
-            Select everything you'd enjoy watching.
+            Select everything you&apos;d enjoy watching.
           </p>
 
           <div style={styles.topicList}>
@@ -228,7 +228,7 @@ export default function OnboardingPage() {
           </div>
 
           <p style={styles.helper}>
-            Optional: tell us what you'd rather not see.
+            Optional: tell us what you&apos;d rather not see.
           </p>
 
           <div style={styles.topicList}>
