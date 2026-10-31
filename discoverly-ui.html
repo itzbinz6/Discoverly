@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#e4e9e1">
+<title>Discoverly — Find your next favorite video</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Fraunces:wght@600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f5f6f1;font-family:'DM Sans',system-ui,sans-serif;color:#17231d}
+a:hover{color:#1f4d3a}
+button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #1f4d3a;outline-offset:2px}
+.nv{display:flex;align-items:center;gap:20px;padding:10px 24px;background:#fff;border-bottom:1px solid #e3e6dc;flex-wrap:wrap}
+.lg{font-family:Fraunces,Georgia,serif;font-size:18px;font-weight:600}
+.sr{flex:1;min-width:200px;max-width:520px;height:44px;box-sizing:border-box;border:1px solid #d5d9cf;border-radius:22px;padding:0 18px;font:inherit;font-size:14px;background:#fff}
+.lk{display:flex;gap:6px;flex-wrap:wrap}
+.lk a{color:#17231d;text-decoration:none;font-size:14px;min-height:44px;padding:0 8px;display:inline-flex;align-items:center}
+.av{width:36px;height:36px;border-radius:50%;background:#d6f26b;display:grid;place-items:center;font-size:12px;font-weight:700}
+.w{max-width:1200px;margin:0 auto;padding:0 24px 56px}
+.hero{margin:24px 0 36px;border-radius:22px;background:radial-gradient(circle at 88% 15%,rgba(214,242,107,.35),transparent 38%),linear-gradient(120deg,#1f4d3a 55%,#2f6b4f);color:#fff;padding:56px 48px}
+.ey{font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:#4f5b54}
+.hero .ey{color:#d6f26b}
+.g{color:#1f4d3a}
+h1,h2,h3{font-family:Fraunces,Georgia,serif;font-weight:600}
+h1{font-size:36px;margin:10px 0 12px;max-width:480px}
+h2{font-size:24px;margin:6px 0 14px}
+h3{font-size:16px;margin:6px 0}
+.hero p{max-width:420px;color:#dbe7df;margin:0 0 22px;font-size:14px;line-height:1.5}
+.bt{width:44px;height:44px;border:0;border-radius:22px;background:#d6f26b;color:#17231d;display:grid;place-items:center;cursor:pointer}
+.mu{color:#4f5b54;font-size:12px}
+.sec{margin-top:36px}
+.hd{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:8px}
+.hd a{color:#1f4d3a;font-size:13px;min-height:44px;display:inline-flex;align-items:center}
+.ch{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 16px}
+.ch button{min-height:44px;padding:0 18px;border:1px solid #d5d9cf;border-radius:22px;background:#fff;font:inherit;font-size:13px;cursor:pointer}
+.ch .on{background:#1f4d3a;color:#fff;border-color:#1f4d3a}
+.fl{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;background:#fff;border:1px solid #e3e6dc;border-radius:14px;padding:16px}
+.fl label{display:flex;flex-direction:column;gap:6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:#4f5b54}
+.fl select{height:44px;border:1px solid #d5d9cf;border-radius:8px;padding:0 10px;font:inherit;font-size:13px;font-weight:400;letter-spacing:0;text-transform:none;color:#17231d;background:#fff}
+.cd{background:#fff;border:1px solid #e3e6dc;border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.th{position:relative;aspect-ratio:16/10}
+.pl{position:absolute;left:12px;bottom:12px;width:44px;height:44px;border:0;border-radius:50%;background:#fff;display:grid;place-items:center;cursor:pointer}
+.du{position:absolute;right:10px;bottom:12px;background:rgba(0,0,0,.78);color:#fff;font-size:11px;padding:2px 7px;border-radius:5px}
+.bd{padding:14px 16px;display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.bk{width:44px;height:44px;flex:none;border:1px solid #e3e6dc;border-radius:50%;background:#fff;display:grid;place-items:center;cursor:pointer;color:#17231d}
+.ft{display:grid;grid-template-columns:1.8fr 1fr}
+.ft .th{aspect-ratio:auto;min-height:300px}
+.ft .bd{flex-direction:column;justify-content:space-between;padding:28px}
+.ft p{font-size:14px;line-height:1.5;color:#4f5b54;margin:0 0 20px}
+.fb{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.gr{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px}
+.cw{display:flex;gap:20px;align-items:center;background:#fff;border:1px solid #e3e6dc;border-radius:14px;padding:20px;flex-wrap:wrap}
+.cw .th{width:160px;aspect-ratio:16/10;border-radius:8px}
+.rs{min-height:44px;padding:0 18px;border:0;border-radius:22px;background:#1f4d3a;color:#fff;font:inherit;font-size:13px;font-weight:500;cursor:pointer}
+.t1{background:linear-gradient(135deg,#e8a64f,#3b2a1a)}
+.t2{background:linear-gradient(135deg,#2c3e50,#8a6a4a)}
+.t3{background:linear-gradient(135deg,#d9c9a8,#7c9a8a)}
+.t4{background:linear-gradient(135deg,#c8b7a6,#4a5560)}
+.t5{background:linear-gradient(135deg,#9a9a9a,#1f1f1f)}
+.t6{background:linear-gradient(135deg,#3d5a6c,#1e2f3a)}
+.t7{background:linear-gradient(135deg,#3a2f2f,#a07a6a)}
+.t8{background:linear-gradient(135deg,#f3d6dd,#d6f26b)}
+@media(max-width:760px){.ft{grid-template-columns:1fr}.hero{padding:36px 24px}}
+
+body{background:#e4e9e1}
+.mu{color:#4f5b54}.ey{color:#4f5b54}
+.nv{background:#e4e9e1;border:0;box-shadow:0 10px 18px -10px #bcc5b8}
+.av{box-shadow:3px 3px 6px #bcc5b8,-3px -3px 6px #f7faf4}
+.sr,.fl select{background:#e4e9e1;border:0;box-shadow:inset 5px 5px 10px #bcc5b8,inset -5px -5px 10px #f7faf4}
+.fl,.cd,.cw{background:#e4e9e1;border:0;box-shadow:9px 9px 20px #bcc5b8,-9px -9px 20px #f7faf4}
+.cd,.cw{padding:10px}
+.th{border-radius:14px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.25)}
+.bd{padding:14px 8px 6px}
+.ch button{background:#e4e9e1;border:0;color:#17231d;box-shadow:5px 5px 10px #bcc5b8,-5px -5px 10px #f7faf4}
+.ch .on{background:#e4e9e1;color:#1f4d3a;font-weight:700;box-shadow:inset 4px 4px 8px #bcc5b8,inset -4px -4px 8px #f7faf4}
+.ch .on::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:#1f4d3a;margin-right:8px}
+.bk{background:#e4e9e1;border:0;box-shadow:4px 4px 8px #bcc5b8,-4px -4px 8px #f7faf4}
+.bk:active,.fb:active{box-shadow:inset 3px 3px 6px #bcc5b8,inset -3px -3px 6px #f7faf4}
+.pl{background:#eef2ea;box-shadow:3px 3px 8px rgba(0,0,0,.4),-2px -2px 6px rgba(255,255,255,.35)}
+.pl:active{box-shadow:inset 3px 3px 6px #bcc5b8}
+.rs{box-shadow:5px 5px 10px #bcc5b8,-5px -5px 10px #f7faf4}
+.fb{background:#e4e9e1;border:0;box-shadow:5px 5px 10px #bcc5b8,-5px -5px 10px #f7faf4}
+.ey:not(.g)::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:8px;background:#c3e24f;box-shadow:inset 1px 1px 2px rgba(0,0,0,.3)}
+.hero{position:relative;overflow:hidden;box-shadow:12px 12px 24px #bcc5b8,-10px -10px 22px #f7faf4}
+.hero>*{position:relative;z-index:2}
+.hero::after{content:'';position:absolute;right:48px;top:50%;margin-top:-90px;width:180px;height:180px;border-radius:50%;background:linear-gradient(145deg,#2f6b4f,#1a4232);box-shadow:inset 10px 10px 20px rgba(0,0,0,.28),inset -8px -8px 18px rgba(255,255,255,.12)}
+.hero::before{content:'';position:absolute;right:98px;top:50%;margin-top:-40px;width:80px;height:80px;border-radius:50%;z-index:1;background:linear-gradient(145deg,#e4ff8a,#c3e24f);box-shadow:6px 6px 14px rgba(0,0,0,.35),-4px -4px 10px rgba(255,255,255,.25)}
+.bt{box-shadow:4px 4px 10px rgba(0,0,0,.3),-3px -3px 8px rgba(255,255,255,.18)}
+.sc{position:absolute;top:10px;right:10px;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#1f4d3a calc(var(--p)*1%),#cfd7cb 0);box-shadow:3px 3px 7px rgba(0,0,0,.35),-2px -2px 6px rgba(255,255,255,.3)}
+.sc::before{content:'';position:absolute;inset:5px;border-radius:50%;background:#e4e9e1;box-shadow:inset 2px 2px 4px #bcc5b8,inset -2px -2px 4px #f7faf4}
+.sc b{position:relative;font-size:12px;color:#17231d}
+.pt{height:10px;border-radius:5px;max-width:260px;margin-bottom:12px;box-shadow:inset 2px 2px 4px #bcc5b8,inset -2px -2px 4px #f7faf4}
+.pt i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#1f4d3a,#6fa54f)}
+
+
+.sk{position:absolute;left:12px;top:-60px;background:#1f4d3a;color:#fff;padding:12px 16px;border-radius:8px;z-index:10}
+.sk:focus{top:12px}
+.bk[aria-pressed="true"]{color:#1f4d3a;box-shadow:inset 3px 3px 6px #bcc5b8,inset -3px -3px 6px #f7faf4}
+.bk[aria-pressed="true"] path{fill:currentColor}
+@media(prefers-reduced-motion:no-preference){.bk,.pl,.ch button,.rs,.fb{transition:box-shadow .15s}}
+@media(max-width:900px){.hero::before,.hero::after{display:none}}
+@media(max-width:760px){.ft .th{min-height:0;aspect-ratio:16/10}}
+@media(max-width:640px){
+.w{padding:0 16px 40px}
+.nv{padding:10px 16px;gap:10px}
+.lg{order:1;flex:1}.av{order:2}
+.sr{order:3;flex-basis:100%;max-width:none}
+.lk{order:4;flex-basis:100%;flex-wrap:nowrap;overflow-x:auto}
+.lk a{flex:none}
+.hero{padding:32px 24px;margin:16px 0 28px}
+h1{font-size:28px}
+.hero::after,.hero::before{display:block}
+.hero::after{width:110px;height:110px;right:-20px;top:auto;bottom:-20px;margin:0}
+.hero::before{width:48px;height:48px;right:11px;top:auto;bottom:11px;margin:0}
+.ch{flex-wrap:nowrap;overflow-x:auto;padding:8px 10px 14px;margin:-8px -10px 4px}
+.ch button{flex:none}
+.fl{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+.gr{grid-template-columns:1fr}
+.cw .th{width:110px}
+}
+</style>
+</head>
+<body>
+<a class="sk" href="#main">Skip to content</a>
+<div>
+<header class="nv">
+<span class="lg">Discoverly</span>
+<input class="sr" type="search" aria-label="Search videos, topics, or creators" placeholder="Search videos, topics, or creators">
+<nav class="lk"><a href="#">Home</a><a href="#">Trending</a><a href="#">Categories</a><a href="#">Watch Later</a></nav>
+<span class="av" role="img" aria-label="Account">AR</span>
+</header>
+<main class="w" id="main">
+<section class="hero">
+<div class="ey">Curated for your curiosity</div>
+<h1>Find your next favorite video</h1>
+<p>Discover thoughtful stories, fresh ideas, and the videos worth making time for.</p>
+<button class="bt" aria-label="Start exploring"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15 9l-2 5-4 1 2-5z"/></svg></button>
+</section>
+<section>
+<div class="hd"><div><div class="ey">Browse by interest</div><h2>A little something for every mood</h2></div><a href="#">Clear filters</a></div>
+<div class="ch"><button class="on" aria-pressed="true">All</button><button aria-pressed="false">Technology</button><button aria-pressed="false">Design</button><button aria-pressed="false">Business</button><button aria-pressed="false">Science</button><button aria-pressed="false">Travel</button><button aria-pressed="false">Music</button><button aria-pressed="false">Gaming</button></div>
+<div class="fl">
+<label>Category<select><option>All categories</option></select></label>
+<label>Duration<select><option>Any length</option></select></label>
+<label>Upload date<select><option>Any time</option></select></label>
+<label>Sort by<select><option>Most popular</option></select></label>
+</div>
+</section>
+<section class="sec">
+<div class="ey">Editor's pick</div><h2>Featured this week</h2>
+<article class="cd ft">
+<div class="th t1"><button class="pl" aria-label="Play video"><svg width="14" height="14" viewBox="0 0 24 24" fill="#17231d"><path d="M8 5v14l11-7z"/></svg></button><span class="du">14:28</span><span class="sc" role="img" aria-label="Sample match score 96" style="--p:96"><b>96</b></span></div>
+<div class="bd"><div><div class="ey g">Travel</div><h3>Above the Quiet: Mountains at First Light</h3><p>A slow, cinematic journey through high country as daybreak reshapes the landscape.</p></div>
+<div class="fb"><div><strong style="font-size:13px">Northbound Films</strong><div class="mu">842K views · 4 days ago</div></div><button class="bk" aria-label="Save to Watch Later" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button></div></div>
+</article>
+</section>
+<section class="sec">
+<div class="ey">Popular right now</div><h2>Trending now</h2>
+<div class="gr">
+<article class="cd"><div class="th t2"><button class="pl" aria-label="Play video"><svg width="14" height="14" viewBox="0 0 24 24" fill="#17231d"><path d="M8 5v14l11-7z"/></svg></button><span class="du">18:42</span><span class="sc" role="img" aria-label="Sample match score 92" style="--p:92"><b>92</b></span></div><div class="bd"><div><div class="ey g">Technology</div><h3>A Better Way to Build on the Web</h3><div class="mu">Mina Rowe · 510K views · 2 days ago</div></div><button class="bk" aria-label="Save to Watch Later" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button></div></article>
+<article class="cd"><div class="th t3"><button class="pl" aria-label="Play video"><svg width="14" height="14" viewBox="0 0 24 24" fill="#17231d"><path d="M8 5v14l11-7z"/></svg></button><span class="du">12:06</span><span class="sc" role="img" aria-label="Sample match score 88" style="--p:88"><b>88</b></span></div><div class="bd"><div><div class="ey g">Design</div><h3>Color Stories: Building a Brand System</h3><div class="mu">Studio Forma · 324K views · 3 weeks ago</div></div><button class="bk" aria-label="Save to Watch Later" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button></div></article>
+<article class="cd"><div class="th t4"><button class="pl" aria-label="Play video"><svg width="14" height="14" viewBox="0 0 24 24" fill="#17231d"><path d="M8 5v14l11-7z"/></svg></button><span class="du">24:18</span><span class="sc" role="img" aria-label="Sample match score 85" style="--p:85"><b>85</b></span></div><div class="bd"><div><div class="ey g">Business</div><h3>The Small Team Advantage</h3><div class="mu">Work in Progress · 689K views · 8 months ago</div></div><button class="bk" aria-label="Save to Watch Later" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button></div></article>
+<article class="cd"><div class="th t5"><button class="pl" aria-label="Play video"><svg width="14" height="14" viewBox="0 0 24 24" fill="#17231d"><path d="M8 5v14l11-7z"/></svg></button><span class="du">09:14</span><span class="sc" role="img" aria-label="Sample match score 90" style="--p:90"><b>90</b></span></div><div class="bd"><div><div class="ey g">Science</div><h3>The Hidden Patterns of Everyday Matter</h3><div class="mu">Field Notes · 278K views · 5 days ago</div></div><button class="bk" aria-label="Save to Watch Later" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button></div></article>
+<article class="cd"><div class="th t6"><button class="pl" aria-label="Play video"><svg width="14" height="14" viewBox="0 0 24 24" fill="#17231d"><path d="M8 5v14l11-7z"/></svg></button><span class="du">16:35</span><span class="sc" role="img" aria-label="Sample match score 94" style="--p:94"><b>94</b></span></div><div class="bd"><div><div class="ey g">Travel</div><h3>One Road, Two Oceans</h3><div class="mu">Open Atlas · 755K views · 2 weeks ago</div></div><button class="bk" aria-label="Save to Watch Later" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button></div></article>
+<article class="cd"><div class="th t7"><button class="pl" aria-label="Play video"><svg width="14" height="14" viewBox="0 0 24 24" fill="#17231d"><path d="M8 5v14l11-7z"/></svg></button><span class="du">21:02</span><span class="sc" role="img" aria-label="Sample match score 83" style="--p:83"><b>83</b></span></div><div class="bd"><div><div class="ey g">Music</div><h3>The Anatomy of a Great Chorus</h3><div class="mu">Sound Room · 402K views · 1 year ago</div></div><button class="bk" aria-label="Save to Watch Later" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button></div></article>
+</div>
+</section>
+<section class="sec">
+<div class="ey">Pick up where you left off</div><h2>Continue watching</h2>
+<div class="cw"><div class="th t8"></div><div><div class="ey g">Design</div><h3>A New Language for Public Spaces</h3><div class="mu" style="margin-bottom:8px">City Form · 5:14 remaining</div><div class="pt" role="progressbar" aria-label="Watched" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100"><i style="width:62%"></i></div><button class="rs">Resume video</button></div></div>
+</section>
+</main>
+</div>
+<script>
+document.querySelectorAll('.ch button').forEach(function(b){b.addEventListener('click',function(){document.querySelectorAll('.ch button').forEach(function(x){x.classList.remove('on');x.setAttribute('aria-pressed','false')});b.classList.add('on');b.setAttribute('aria-pressed','true')})});
+document.querySelectorAll('.bk').forEach(function(b){b.addEventListener('click',function(){b.setAttribute('aria-pressed',b.getAttribute('aria-pressed')==='true'?'false':'true')})});
+</script>
+</body>
+</html>
