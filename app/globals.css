@@ -284,3 +284,50 @@ button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{ou
     text-align: left;
   }
 }
+/* Tablet navigation fix */
+@media (min-width: 641px) and (max-width: 760px) {
+  .topbar {
+    position: sticky;
+    overflow: visible;
+  }
+
+  .mobile-menu-toggle {
+    display: block;
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: 9px;
+    background: var(--panel);
+    color: var(--ink);
+    box-shadow: 3px 3px 7px #cbd2c8, -3px -3px 7px #f8faf4;
+    font-size: 18px;
+  }
+
+  .mobile-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 24px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: min(88vw, 310px);
+    padding: 12px;
+    border-radius: 16px;
+    background: rgba(25, 30, 27, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.18);
+  }
+
+  .mobile-menu > button {
+    color: #fff;
+    padding: 11px 10px;
+    border-radius: 9px;
+    background: transparent;
+    text-align: left;
+  }
+
+  .mobile-menu > button:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
