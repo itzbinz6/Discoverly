@@ -192,7 +192,7 @@ export default function PreferencesPage() {
         </p>
 
         <section style={styles.section}>
-          <h2>Topics you're interested in</h2>
+          <h2>Topics you&apos;re interested in</h2>
           <p>{preferredTopics.length} selected</p>
 
           <div style={styles.topicList}>
