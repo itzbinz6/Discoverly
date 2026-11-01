@@ -331,3 +331,91 @@ button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{ou
     background: rgba(255, 255, 255, 0.12);
   }
 }
+
+/* Simplified mobile and tablet account section */
+.mobile-account-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  min-width: 0;
+}
+
+.mobile-account-email {
+  margin: 0 0 4px;
+  padding: 10px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  opacity: 0.85;
+}
+
+.mobile-account-section button {
+  width: 100%;
+  padding: 11px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  text-align: left;
+  font-size: 12px;
+}
+
+.mobile-account-section button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+/* Apply the existing mobile account dropdown design to tablets */
+@media (max-width: 760px) {
+  .mobile-account-dropdown {
+    margin-top: 7px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .mobile-account-email {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    color: #fff;
+    font-size: 11px;
+    cursor: pointer;
+    list-style: none;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-account-email::-webkit-details-marker {
+    display: none;
+  }
+
+  .mobile-account-chevron {
+    font-size: 17px;
+    transition: transform 0.2s ease;
+  }
+
+  .mobile-account-dropdown[open] .mobile-account-chevron {
+    transform: rotate(180deg);
+  }
+
+  .mobile-account-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 0 2px 12px;
+  }
+
+  .mobile-account-actions button {
+    width: 100%;
+    padding: 11px;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+    border: 0;
+    border-radius: 8px;
+    text-align: left;
+  }
+}
