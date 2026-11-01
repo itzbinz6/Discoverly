@@ -2,12 +2,14 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "../../lib/supabase/client";
 import "./auth.css";
 
 type AuthMode = "login" | "signup";
 
 export default function AuthPage() {
+  const router = useRouter();
   const [supabase] = useState(() => createClient());
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
@@ -38,41 +40,69 @@ export default function AuthPage() {
   }, [supabase]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage("");
-    setLoading(true);
+  event.preventDefault();
+  setMessage("");
+  setLoading(true);
 
-    try {
-      if (mode === "signup") {
-        const { data, error } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-        });
-        if (error) throw error;
+  try {
+    if (mode === "signup") {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+      });
 
-        if (data.session) {
-          setMessageType("success");
-          setMessage("Your account has been created. You're signed in!");
-        } else {
-          setMessageType("info");
-          setMessage("Account created. Check your email if confirmation is required.");
-        }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        });
-        if (error) throw error;
+      if (error) throw error;
+
+      if (data.session) {
         setMessageType("success");
-        setMessage("Welcome back! You're signed in.");
+        setMessage("Account created! Let's personalise your experience.");
+
+        router.push("/onboarding");
+      } else {
+        setMessageType("info");
+        setMessage(
+          "Account created. Please check your email if confirmation is required."
+        );
       }
-    } catch (error) {
-      setMessageType("error");
-      setMessage(error instanceof Error ? error.message : "Something went wrong. Please try again.");
-    } finally {
-      setLoading(false);
+    } else {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) throw error;
+
+      const user = data.user;
+
+      // Check whether this user has completed onboarding.
+      const { data: preferences, error: preferenceError } = await supabase
+        .from("user_preferences")
+        .select("onboarding_completed")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (preferenceError) throw preferenceError;
+
+      setMessageType("success");
+      setMessage("Welcome back!");
+
+      if (preferences?.onboarding_completed) {
+        router.push("/");
+      } else {
+        router.push("/onboarding");
+      }
     }
+  } catch (error) {
+    setMessageType("error");
+    setMessage(
+      error instanceof Error
+        ? error.message
+        : "Something went wrong. Please try again."
+    );
+  } finally {
+    setLoading(false);
   }
+}
 
   async function handleLogout() {
     setLoading(true);

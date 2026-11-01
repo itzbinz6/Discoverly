@@ -55,3 +55,232 @@ button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{ou
 .mobile-menu .mobile-auth-button{background:var(--green);color:#fff}
 @media(max-width:900px){.nav-links{gap:12px}.nav-auth-link{font-size:10px}.nav-auth-button{padding:8px 10px;font-size:10px}}
 @media(max-width:760px){.nav-auth-link,.nav-auth-button{display:none}}
+
+
+/* Mobile menu: glassmorphism */
+@media (max-width: 640px) {
+  .mobile-menu {
+    background: rgba(255, 255, 255, 0.58);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    box-shadow: 0 12px 35px rgba(31, 55, 40, 0.14);
+    border-radius: 16px;
+    padding: 12px;
+  }
+
+  .mobile-menu button {
+    border-radius: 9px;
+    transition: background 0.2s ease;
+  }
+
+  .mobile-menu button:hover {
+    background: rgba(49, 92, 67, 0.10);
+  }
+
+  /* Signed-in account information */
+  .mobile-account-email {
+    display: block;
+    margin: 8px 2px;
+    padding: 13px 12px;
+    border-radius: 10px;
+    background: rgba(49, 92, 67, 0.08);
+    border: 1px solid rgba(49, 92, 67, 0.12);
+    color: #315c43;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+}
+
+
+/* Preferences page back button */
+.preferences-back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 17px;
+  border: 1px solid rgba(49, 92, 67, 0.2);
+  border-radius: 10px;
+  background: #315c43;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.preferences-back-button:hover {
+  background: #244a35;
+  transform: translateY(-1px);
+}
+
+@media (max-width: 640px) {
+  .preferences-back-button {
+    width: 100%;
+    padding: 13px;
+    font-size: 13px;
+  }
+}
+
+/* Discoverly mobile glassmorphism menu */
+@media (max-width: 640px) {
+  .mobile-menu {
+    background: rgba(30, 65, 46, 0.48);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 16px 40px rgba(15, 35, 23, 0.22);
+    border-radius: 18px;
+    padding: 12px;
+    gap: 4px;
+  }
+
+  .mobile-menu > button {
+    color: #ffffff;
+    border-radius: 10px;
+    padding: 12px;
+    transition: background 0.2s ease;
+  }
+
+  .mobile-menu > button:hover {
+    background: rgba(255, 255, 255, 0.13);
+  }
+
+  /* Account dropdown */
+  .mobile-account-dropdown {
+    margin-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    padding-top: 8px;
+  }
+
+  .mobile-account-email {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 13px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-account-email::-webkit-details-marker {
+    display: none;
+  }
+
+  .mobile-account-chevron {
+    font-size: 17px;
+    transition: transform 0.2s ease;
+  }
+
+  .mobile-account-dropdown[open] .mobile-account-chevron {
+    transform: rotate(180deg);
+  }
+
+  .mobile-account-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 0 2px 12px;
+  }
+
+  .mobile-account-actions button {
+    width: 100%;
+    padding: 11px 12px;
+    border: 0;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #ffffff;
+    text-align: left;
+    font-size: 12px;
+  }
+
+  .mobile-account-actions button:hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
+}
+
+/* Floating mobile glass dropdown */
+@media (max-width: 640px) {
+  .topbar {
+    position: sticky;
+    overflow: visible;
+  }
+
+  .mobile-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 14px;
+    left: auto;
+    z-index: 20;
+
+    width: min(88vw, 310px);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    padding: 12px;
+    border-radius: 16px;
+
+    background: rgba(25, 30, 27, 0.42);
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.18);
+  }
+
+  .mobile-menu > button {
+    color: #fff;
+    padding: 11px 10px;
+    border-radius: 9px;
+    background: transparent;
+    text-align: left;
+  }
+
+  .mobile-menu > button:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .mobile-account-dropdown {
+    margin-top: 7px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .mobile-account-email {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    color: #fff;
+    font-size: 11px;
+    cursor: pointer;
+    list-style: none;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-account-email::-webkit-details-marker {
+    display: none;
+  }
+
+  .mobile-account-actions button {
+    width: 100%;
+    padding: 11px;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+    border: 0;
+    border-radius: 8px;
+    text-align: left;
+  }
+}

@@ -24,6 +24,8 @@ function VideoCard({ video, saved, onToggleSave, onPreview }: { video: Video; sa
 export default function Home() {
   const [supabase] = useState(() => createClient());
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [preferredTopics, setPreferredTopics] = useState<string[]>([]);
+  const [excludedTopics, setExcludedTopics] = useState<string[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
@@ -33,7 +35,7 @@ export default function Home() {
   const [category, setCategory] = useState('All categories');
   const [duration, setDuration] = useState('Any length');
   const [date, setDate] = useState('Any time');
-  const [sort, setSort] = useState('Most popular');
+  const [sort, setSort] = useState('Best match');
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -42,32 +44,58 @@ export default function Home() {
   useEffect(() => {
     let mounted = true;
 
-    const syncSession = async (sessionUserId: string | null, sessionEmail: string | null) => {
-      if (!mounted) return;
-      setUserId(sessionUserId);
-      setUserEmail(sessionEmail);
-      setAuthReady(true);
+    
+  const syncSession = async (sessionUserId: string | null, sessionEmail: string | null) => {
+    if (!mounted) return;
 
-      if (!sessionUserId) {
-        setSavedIds([]);
-        return;
-      }
+    setUserId(sessionUserId);
+    setUserEmail(sessionEmail);
+    setAuthReady(true);
 
-      const { data, error } = await supabase
-        .from('saved_videos')
-        .select('video_id')
-        .eq('user_id', sessionUserId)
-        .order('created_at', { ascending: false });
+    if (!sessionUserId) {
+      setSavedIds([]);
+      setPreferredTopics([]);
+      setExcludedTopics([]);
+      return;
+    }
 
-      if (!mounted) return;
-      if (error) {
-        console.error('Could not load saved videos:', error.message);
-        setSaveMessage('Could not load your saved videos. Please refresh and try again.');
-        return;
-      }
-      setSavedIds((data ?? []).map((row) => row.video_id));
-      setSaveMessage('');
-    };
+    // Load the user's preferences
+    const { data: preferences, error: preferencesError } = await supabase
+      .from('user_preferences')
+      .select('preferred_topics, excluded_topics')
+      .eq('user_id', sessionUserId)
+      .maybeSingle();
+
+    if (!mounted) return;
+
+    if (preferencesError) {
+      console.error('Could not load user preferences:', preferencesError.message);
+      setPreferredTopics([]);
+      setExcludedTopics([]);
+    } else {
+      setPreferredTopics(preferences?.preferred_topics ?? []);
+      setExcludedTopics(preferences?.excluded_topics ?? []);
+    }
+
+    // Load the user's saved videos
+    const { data, error } = await supabase
+      .from('saved_videos')
+      .select('video_id')
+      .eq('user_id', sessionUserId)
+      .order('created_at', { ascending: false });
+
+    if (!mounted) return;
+
+    if (error) {
+      console.error('Could not load saved videos:', error.message);
+      setSaveMessage('Could not load your saved videos. Please refresh and try again.');
+      return;
+    }
+
+    setSavedIds((data ?? []).map((row) => row.video_id));
+    setSaveMessage('');
+  };
+
 
     supabase.auth.getSession().then(({ data, error }) => {
       if (error) {
@@ -106,11 +134,32 @@ export default function Home() {
       const dateMatch = date === 'Any time' || (date === 'Today' && days === 0) || (date === 'This week' && days <= 7) || (date === 'This month' && days <= 30) || (date === 'This year' && days <= 365);
       return categoryMatch && queryMatch && durationMatch && dateMatch;
     });
-    if (sort === 'Best match') list = [...list].sort((a, b) => b.score - a.score);
+    if (sort === 'Best match') {
+      list = [...list].sort((a, b) => {
+        const getPersonalizedScore = (video: Video) => {
+          const topic = video.category.trim().toLowerCase();
+
+          const isExcluded = excludedTopics.some(
+            item => item.trim().toLowerCase() === topic
+          );
+
+          const isPreferred = preferredTopics.some(
+            item => item.trim().toLowerCase() === topic
+          );
+
+          if (isExcluded) return video.score - 15;
+          if (isPreferred) return video.score + 15;
+
+          return video.score;
+        };
+
+        return getPersonalizedScore(b) - getPersonalizedScore(a);
+      });
+    }
     if (sort === 'Newest') list = [...list].sort((a, b) => ageDays(a.age) - ageDays(b.age));
     if (sort === 'Most popular') list = [...list].sort((a, b) => Number(b.views.split('K')[0]) - Number(a.views.split('K')[0]));
     return list;
-  }, [active, category, date, duration, query, sort]);
+  }, [active, category, date, duration, query, sort, preferredTopics, excludedTopics]);;
   const allVideos = [...videos, featuredVideo, continueVideo];
   const savedVideos = allVideos.filter(v => savedIds.includes(v.id));
 
@@ -158,16 +207,71 @@ export default function Home() {
       setSavingVideoId(null);
     }
   };
-  const clearFilters = () => { setActive('All'); setCategory('All categories'); setDuration('Any length'); setDate('Any time'); setSort('Most popular'); setQuery(''); };
+  const clearFilters = () => { setActive('All'); setCategory('All categories'); setDuration('Any length'); setDate('Any time'); setSort('Best match'); setQuery(''); };
   const scrollTo = (id: string) => { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); setMobileMenuOpen(false); setAccountOpen(false); };
 
   return <main id="top">
     <nav className="topbar" aria-label="Main navigation">
       <a className="wordmark" href="#top">Discoverly</a>
       <form className="nav-search" role="search" onSubmit={e => { e.preventDefault(); scrollTo('trending'); }}><span aria-hidden="true">⌕</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search videos, topics, or creators" aria-label="Search videos, topics, or creators" /><button className="search-submit" type="submit" aria-label="Search">↵</button></form>
-      <div className="nav-links"><a href="#top">Home</a><a href="#trending">Trending</a><a href="#interests">Categories</a><a href="#watch-later">Watch Later{savedIds.length > 0 ? ` (${savedIds.length})` : ''}</a>{!userEmail && <><a className="nav-auth-link" href="/auth">Log in</a><a className="nav-auth-button" href="/auth?mode=signup">Sign up</a></>}{userEmail && <div className="account-wrap"><button className="avatar" aria-label="Open account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen(v => !v)}>{userEmail.slice(0, 1).toUpperCase()}</button>{accountOpen && <div className="account-menu"><strong>Your account</strong><span>{userEmail}</span><button onClick={() => { setAccountOpen(false); scrollTo('watch-later'); }}>Saved videos ({savedIds.length})</button><button onClick={() => { clearFilters(); setAccountOpen(false); scrollTo('trending'); }}>Reset filters</button><button onClick={handleLogout}>Log out</button></div>}</div>}{!authReady && <span className="auth-loading" aria-label="Checking account">…</span>}</div>
+      <div className="nav-links"><a href="#top">Home</a><a href="#trending">Trending</a><a href="#interests">Categories</a><a href="#watch-later">Watch Later{savedIds.length > 0 ? ` (${savedIds.length})` : ''}</a>{!userEmail && <><a className="nav-auth-link" href="/auth">Log in</a><a className="nav-auth-button" href="/auth?mode=signup">Sign up</a></>}{userEmail && <div className="account-wrap"><button className="avatar" aria-label="Open account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen(v => !v)}>{userEmail.slice(0, 1).toUpperCase()}</button>{accountOpen && <div className="account-menu"><strong>Your account</strong><span>{userEmail}</span><button onClick={() => {
+  setAccountOpen(false);
+  window.location.assign('/preferences');
+}}>
+  Edit preferences
+</button><button onClick={() => { setAccountOpen(false); scrollTo('watch-later'); }}>Saved videos ({savedIds.length})</button><button onClick={() => { clearFilters(); setAccountOpen(false); scrollTo('trending'); }}>Reset filters</button><button onClick={handleLogout}>Log out</button></div>}</div>}{!authReady && <span className="auth-loading" aria-label="Checking account">…</span>}</div>
       <button className="mobile-menu-toggle" aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(v => !v)}>{mobileMenuOpen ? '×' : '☰'}</button>
-      {mobileMenuOpen && <div className="mobile-menu"><button onClick={() => scrollTo('top')}>Home</button><button onClick={() => scrollTo('trending')}>Trending</button><button onClick={() => scrollTo('interests')}>Categories</button><button onClick={() => scrollTo('watch-later')}>Watch Later ({savedIds.length})</button><button onClick={() => { clearFilters(); setMobileMenuOpen(false); scrollTo('interests'); }}>Reset filters</button>{userEmail ? <><span className="mobile-account-email">Signed in as {userEmail}</span><button onClick={handleLogout}>Log out</button></> : <><a className="mobile-auth-link" href="/auth">Log in</a><a className="mobile-auth-button" href="/auth?mode=signup">Create account</a></>}</div>}
+      {mobileMenuOpen && (
+  <div className="mobile-menu">
+    <button onClick={() => scrollTo("top")}>Home</button>
+    <button onClick={() => scrollTo("trending")}>Trending</button>
+    <button onClick={() => scrollTo("interests")}>Categories</button>
+    <button onClick={() => scrollTo("watch-later")}>
+      Watch Later ({savedIds.length})
+    </button>
+
+    <button
+      onClick={() => {
+        clearFilters();
+        setMobileMenuOpen(false);
+        scrollTo("interests");
+      }}
+    >
+      Reset filters
+    </button>
+
+    {userEmail ? (
+      <details className="mobile-account-dropdown">
+        <summary className="mobile-account-email">
+          <span>Signed in as {userEmail}</span>
+          <span className="mobile-account-chevron">⌄</span>
+        </summary>
+
+        <div className="mobile-account-actions">
+          <button
+            onClick={() => {
+              setMobileMenuOpen(false);
+              window.location.assign("/preferences");
+            }}
+          >
+            Edit Preferences
+          </button>
+
+          <button onClick={handleLogout}>Log out</button>
+        </div>
+      </details>
+    ) : (
+      <>
+        <a className="mobile-auth-link" href="/auth">
+          Log in
+        </a>
+        <a className="mobile-auth-button" href="/auth?mode=signup">
+          Create account
+        </a>
+      </>
+    )}
+  </div>
+)}
     </nav>
     <div className="page-wrap">
       <section className="hero"><div className="hero-copy"><div className="hero-kicker"><i/> CURATED FOR YOUR CURIOSITY</div><h1>Find your next favorite<br className="desktop-break"/> video</h1><p>Discover thoughtful stories, fresh ideas, and the videos worth making time for.</p><button className="compass" aria-label="Explore videos" title="Explore videos" onClick={() => scrollTo('trending')}>⊙</button></div><div className="hero-orb" aria-hidden="true"><div className="orb-core"/></div></section>
