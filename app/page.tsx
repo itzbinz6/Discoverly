@@ -300,9 +300,19 @@ export default function Home() {
     if (sort === 'Most popular') list = [...list].sort((a, b) => Number(b.views.split('K')[0]) - Number(a.views.split('K')[0]));
     return list;
   }, [active, category, date, duration, query, sort, preferredTopics, excludedTopics, liveVideos]);
-  const allVideos = [...videos, featuredVideo, continueVideo];
-  const savedVideos = allVideos.filter(v => savedIds.includes(v.id));
+  const allVideos = [
+  ...liveVideos,
+  ...videos,
+  currentFeaturedVideo,
+  featuredVideo,
+  continueVideo,
+];
 
+const savedVideos = allVideos
+  .filter((video, index, list) =>
+    list.findIndex(item => item.id === video.id) === index
+  )
+  .filter(video => savedIds.includes(video.id));
   const toggleSave = async (id: string) => {
     if (!userId) {
       window.location.assign('/auth?next=/');
