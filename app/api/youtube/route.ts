@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 const YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3";
 
 type YouTubeSearchResponse = {
+  nextPageToken?: string;
   items?: Array<{ id?: { videoId?: string } }>;
 };
 
@@ -50,10 +51,9 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-
-    // Get the search query and optional category ID.
     const query = searchParams.get("q")?.trim() ?? "";
     const categoryId = searchParams.get("categoryId")?.trim();
+    const pageToken = searchParams.get("pageToken")?.trim();
 
     if (!query) {
       return NextResponse.json(
@@ -69,10 +69,9 @@ export async function GET(request: Request) {
       );
     }
 
-    // Build YouTube search request.
     const searchUrl = new URL(`${YOUTUBE_API_URL}/search`);
 
-    const searchParamsForYouTube = new URLSearchParams({
+    const youtubeParams = new URLSearchParams({
       part: "snippet",
       type: "video",
       maxResults: "30",
@@ -83,12 +82,15 @@ export async function GET(request: Request) {
     });
 
     if (categoryId) {
-      searchParamsForYouTube.set("videoCategoryId", categoryId);
+      youtubeParams.set("videoCategoryId", categoryId);
     }
 
-    searchUrl.search = searchParamsForYouTube.toString();
+    if (pageToken) {
+      youtubeParams.set("pageToken", pageToken);
+    }
 
-    // Fetch available YouTube categories.
+    searchUrl.search = youtubeParams.toString();
+
     const categoriesUrl = new URL(
       `${YOUTUBE_API_URL}/videoCategories`
     );
@@ -119,11 +121,6 @@ export async function GET(request: Request) {
     const searchData =
       (await searchResponse.json()) as YouTubeSearchResponse;
 
-    const videoIds = (searchData.items ?? [])
-      .map((item) => item.id?.videoId)
-      .filter((id): id is string => Boolean(id));
-
-    // Retrieve category information.
     let categories: YouTubeCategoriesResponse["items"] = [];
 
     if (categoriesResponse.ok) {
@@ -131,7 +128,7 @@ export async function GET(request: Request) {
         (await categoriesResponse.json()) as YouTubeCategoriesResponse;
 
       categories = (categoriesData.items ?? []).filter(
-        (category) => category.snippet.assignable
+        (item) => item.snippet.assignable
       );
     } else {
       console.error(
@@ -141,24 +138,27 @@ export async function GET(request: Request) {
     }
 
     const categoryNames = new Map(
-      (categories ?? []).map((category) => [
-        category.id,
-        category.snippet.title,
+      (categories ?? []).map((item) => [
+        item.id,
+        item.snippet.title,
       ])
     );
 
-    // Return an empty video list if no videos were found.
+    const videoIds = (searchData.items ?? [])
+      .map((item) => item.id?.videoId)
+      .filter((id): id is string => Boolean(id));
+
     if (videoIds.length === 0) {
       return NextResponse.json({
         videos: [],
-        categories: (categories ?? []).map((category) => ({
-          id: category.id,
-          name: category.snippet.title,
+        categories: (categories ?? []).map((item) => ({
+          id: item.id,
+          name: item.snippet.title,
         })),
+        nextPageToken: searchData.nextPageToken ?? null,
       });
     }
 
-    // Retrieve full details for the videos.
     const detailsUrl = new URL(`${YOUTUBE_API_URL}/videos`);
 
     detailsUrl.search = new URLSearchParams({
@@ -202,10 +202,11 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       videos,
-      categories: (categories ?? []).map((category) => ({
-        id: category.id,
-        name: category.snippet.title,
+      categories: (categories ?? []).map((item) => ({
+        id: item.id,
+        name: item.snippet.title,
       })),
+      nextPageToken: searchData.nextPageToken ?? null,
     });
   } catch (error) {
     console.error("YouTube API route error:", error);

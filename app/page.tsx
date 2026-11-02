@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '../lib/supabase/client';
 
 type Video = {
@@ -30,7 +30,16 @@ const videos: Video[] = [
 ];
 const featuredVideo: Video = { id: 'mountains', category: 'TRAVEL', title: 'Above the Quiet: Mountains at First Light', creator: 'Northbound Films', views: '842K views', age: '4 days ago', duration: '14:28', score: 96, tone: 'travel' };
 const continueVideo: Video = { id: 'public-spaces', category: 'DESIGN', title: 'A New Language for Public Spaces', creator: 'City Form', views: '—', age: 'Continue watching', duration: '18:30', score: 87, tone: 'design' };
-const interests = ['All', 'Technology', 'Design', 'Business', 'Science', 'Travel', 'Music', 'Gaming'];
+const popularSearches = [
+  'Artificial Intelligence',
+  'Web Development',
+  'Blockchain Technology',
+  'UI/UX Design',
+  'Science and Technology',
+  'Business Ideas',
+  'Generative AI',
+  'Programming Tutorials',
+];
 const formatYouTubeDuration = (value: string) => {
   const match = value.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
 
@@ -142,15 +151,21 @@ export default function Home() {
   const [userId, setUserId] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
-  const [savingVideoId, setSavingVideoId] = useState<string | null>(null);
-  const [active, setActive] = useState('All');
+  const [savedVideosLoading, setSavedVideosLoading] = useState(false);
+  const activeUserIdRef = useRef<string | null>(null);
+  const savingVideoIdRef = useRef<string | null>(null);
+ 
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All categories');
   const [duration, setDuration] = useState('Any length');
   const [date, setDate] = useState('Any time');
   const [sort, setSort] = useState('Best match');
   const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [savedVideos, setSavedVideos] = useState<Video[]>([]);
   const [liveVideos, setLiveVideos] = useState<Video[]>([]);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
   const [youtubeCategories, setYoutubeCategories] = useState<YouTubeCategory[]>([]);
   const [youtubeLoading, setYoutubeLoading] = useState(false);
   const [youtubeError, setYoutubeError] = useState('');
@@ -159,62 +174,175 @@ export default function Home() {
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchFormRef = useRef<HTMLFormElement>(null);
+
+  const searchSuggestions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    if (!normalizedQuery) return popularSearches.slice(0, 5);
+
+    return popularSearches
+      .filter((suggestion) =>
+        suggestion.toLowerCase().includes(normalizedQuery)
+      )
+      .sort((a, b) => {
+        const aStartsWithQuery = a.toLowerCase().startsWith(normalizedQuery);
+        const bStartsWithQuery = b.toLowerCase().startsWith(normalizedQuery);
+        return Number(bStartsWithQuery) - Number(aStartsWithQuery);
+      })
+      .slice(0, 5);
+  }, [query]);
+
+  useEffect(() => {
+    if (!searchFocused) return;
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !searchFormRef.current?.contains(event.target)
+      ) {
+        setSearchFocused(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+    };
+  }, [searchFocused]);
 
   useEffect(() => {
     let mounted = true;
+    let sessionRequestId = 0;
 
-    
-  const syncSession = async (sessionUserId: string | null, sessionEmail: string | null) => {
-    if (!mounted) return;
+    const syncSession = async (
+      sessionUserId: string | null,
+      sessionEmail: string | null
+    ) => {
+      if (!mounted) return;
 
-    setUserId(sessionUserId);
-    setUserEmail(sessionEmail);
-    setAuthReady(true);
+      const requestId = ++sessionRequestId;
+      const accountChanged = activeUserIdRef.current !== sessionUserId;
+      activeUserIdRef.current = sessionUserId;
+      setUserId(sessionUserId);
+      setUserEmail(sessionEmail);
+      setAuthReady(true);
 
-    if (!sessionUserId) {
-      setSavedIds([]);
-      setPreferredTopics([]);
-      setExcludedTopics([]);
-      return;
-    }
+      if (accountChanged) {
+        setSavedIds([]);
+        setSavedVideos([]);
+        setSaveMessage('');
+        setPreferredTopics([]);
+        setExcludedTopics([]);
+      }
 
-    // Load the user's preferences
-    const { data: preferences, error: preferencesError } = await supabase
-      .from('user_preferences')
-      .select('preferred_topics, excluded_topics')
-      .eq('user_id', sessionUserId)
-      .maybeSingle();
+      if (!sessionUserId) {
+        setSavedVideosLoading(false);
+        return;
+      }
 
-    if (!mounted) return;
+      setSavedVideosLoading(true);
 
-    if (preferencesError) {
-      console.error('Could not load user preferences:', preferencesError.message);
-      setPreferredTopics([]);
-      setExcludedTopics([]);
-    } else {
-      setPreferredTopics(preferences?.preferred_topics ?? []);
-      setExcludedTopics(preferences?.excluded_topics ?? []);
-    }
+      try {
+        const [preferencesResult, savedVideosResult] = await Promise.all([
+          supabase
+            .from('user_preferences')
+            .select('preferred_topics, excluded_topics')
+            .eq('user_id', sessionUserId)
+            .maybeSingle(),
+          supabase
+            .from('saved_videos')
+            .select('video_id, title, channel_title, thumbnail_url, video_url, created_at')
+            .eq('user_id', sessionUserId)
+            .order('created_at', { ascending: false }),
+        ]);
 
-    // Load the user's saved videos
-    const { data, error } = await supabase
-      .from('saved_videos')
-      .select('video_id')
-      .eq('user_id', sessionUserId)
-      .order('created_at', { ascending: false });
+        if (
+          !mounted ||
+          requestId !== sessionRequestId ||
+          activeUserIdRef.current !== sessionUserId
+        ) {
+          return;
+        }
 
-    if (!mounted) return;
+        if (preferencesResult.error) {
+          console.error(
+            'Could not load user preferences:',
+            preferencesResult.error.message
+          );
+          setPreferredTopics([]);
+          setExcludedTopics([]);
+        } else {
+          setPreferredTopics(
+            preferencesResult.data?.preferred_topics ?? []
+          );
+          setExcludedTopics(
+            preferencesResult.data?.excluded_topics ?? []
+          );
+        }
 
-    if (error) {
-      console.error('Could not load saved videos:', error.message);
-      setSaveMessage('Could not load your saved videos. Please refresh and try again.');
-      return;
-    }
+        if (savedVideosResult.error) {
+          console.error(
+            'Could not load saved videos:',
+            savedVideosResult.error.message
+          );
+          setSavedIds([]);
+          setSavedVideos([]);
+          setSaveMessage('Could not load your saved videos. Please refresh and try again.');
+          setSavedVideosLoading(false);
+          return;
+        }
 
-    setSavedIds((data ?? []).map((row) => row.video_id));
-    setSaveMessage('');
-  };
+        const loadedSavedVideos = new Map<string, Video>();
+        for (const row of savedVideosResult.data ?? []) {
+          if (loadedSavedVideos.has(row.video_id)) continue;
 
+          const savedAt = row.created_at ? new Date(row.created_at) : null;
+          const age =
+            savedAt && !Number.isNaN(savedAt.getTime())
+              ? formatYouTubeAge(savedAt.toISOString())
+              : 'Saved video';
+
+          loadedSavedVideos.set(row.video_id, {
+            id: row.video_id,
+            title: row.title?.trim() || 'Untitled video',
+            creator: row.channel_title?.trim() || 'Unknown creator',
+            thumbnail: row.thumbnail_url || undefined,
+            videoUrl:
+              row.video_url ||
+              `https://www.youtube.com/watch?v=${encodeURIComponent(row.video_id)}`,
+            category: 'SAVED',
+            views: '—',
+            age,
+            duration: '—',
+            score: 0,
+            tone: 'tech',
+          });
+        }
+
+        const savedVideoList = [...loadedSavedVideos.values()];
+
+        setSavedVideos(savedVideoList);
+        setSavedIds(savedVideoList.map((video) => video.id));
+        setSaveMessage('');
+        setSavedVideosLoading(false);
+      } catch (error) {
+        if (
+          !mounted ||
+          requestId !== sessionRequestId ||
+          activeUserIdRef.current !== sessionUserId
+        ) {
+          return;
+        }
+
+        console.error('Could not load saved videos:', error);
+        setSavedIds([]);
+        setSavedVideos([]);
+        setSaveMessage('Could not load your saved videos. Please refresh and try again.');
+        setSavedVideosLoading(false);
+      }
+    };
 
     supabase.auth.getSession().then(({ data, error }) => {
       if (error) {
@@ -232,54 +360,100 @@ export default function Home() {
 
     return () => {
       mounted = false;
+      sessionRequestId += 1;
       subscription.unsubscribe();
     };
   }, [supabase]);
-  useEffect(() => {
-  let mounted = true;
 
-  const fetchYouTubeVideos = async () => {
+  const fetchVideos = async (
+    term: string,
+    selectedCategory: string,
+    pageToken?: string
+  ) => {
+    const params = new URLSearchParams({ q: term.trim() || 'videos' });
+
+    if (selectedCategory !== 'All categories') {
+      params.set('categoryId', selectedCategory);
+    }
+
+    if (pageToken) params.set('pageToken', pageToken);
+
+    const response = await fetch(`/api/youtube?${params.toString()}`);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null);
+      throw new Error(errorData?.error || 'Could not load YouTube videos.');
+    }
+
+    return response.json();
+  };
+
+  const performSearch = async (
+    term: string,
+    selectedCategory = category
+  ) => {
     setYoutubeLoading(true);
     setYoutubeError('');
+    setNextPageToken(null);
+    setLiveVideos([]);
+    setSearchFocused(false);
+
+    const normalizedTerm = term.trim();
+    setSearchTerm(normalizedTerm);
 
     try {
-      const response = await fetch('/api/youtube?q=videos');
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-
-        throw new Error(
-          errorData?.error || `YouTube request failed (${response.status}).`
-        );
-      }
-
-      const data = await response.json();
-
-      if (!mounted) return;
+      const data = await fetchVideos(
+        normalizedTerm || 'videos',
+        selectedCategory
+      );
 
       setLiveVideos(convertYouTubeVideos(data.videos ?? []));
       setYoutubeCategories(data.categories ?? []);
+      setNextPageToken(data.nextPageToken ?? null);
     } catch (error) {
-      if (!mounted) return;
-
-      console.error('YouTube fetch error:', error);
-
+      console.error('YouTube search error:', error);
       setYoutubeError(
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong while loading videos.'
+        error instanceof Error ? error.message : 'Something went wrong while searching.'
       );
     } finally {
-      if (mounted) setYoutubeLoading(false);
+      setYoutubeLoading(false);
     }
   };
 
-  void fetchYouTubeVideos();
+  const loadMoreVideos = async () => {
+    if (!nextPageToken || loadingMore) return;
 
-  return () => {
-    mounted = false;
+    setLoadingMore(true);
+    setYoutubeError('');
+
+    try {
+      const data = await fetchVideos(searchTerm, category, nextPageToken);
+      const newVideos = convertYouTubeVideos(data.videos ?? []);
+
+      setLiveVideos((current) => {
+        const existingIds = new Set(current.map((video) => video.id));
+        return [
+          ...current,
+          ...newVideos.filter((video) => !existingIds.has(video.id)),
+        ];
+      });
+
+      setNextPageToken(data.nextPageToken ?? null);
+    } catch (error) {
+      console.error('Could not load more videos:', error);
+      setYoutubeError(
+        error instanceof Error ? error.message : 'Could not load more videos.'
+      );
+    } finally {
+      setLoadingMore(false);
+    }
   };
-}, []);
+
+  useEffect(() => {
+    void performSearch('', 'All categories');
+    // Initial feed load only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleLogout = async () => {
     const { error } = await supabase.auth.signOut();
@@ -289,33 +463,39 @@ export default function Home() {
   };
 
   const filtered = useMemo(() => {
-    let list = (liveVideos.length > 0 ? liveVideos : videos).filter(v => {
-      const activeMatch =
-  active === 'All' ||
-  v.category.toLowerCase() === active.toLowerCase() ||
-  (active === 'Technology' && v.category.toLowerCase() === 'science & technology');
+    let list = [...(youtubeError && liveVideos.length === 0 ? videos : liveVideos)];
 
-const categoryMatch =
-  activeMatch &&
-  (category === 'All categories' || v.categoryId === category);
-      const queryMatch = `${v.title} ${v.creator} ${v.category}`.toLowerCase().includes(query.trim().toLowerCase());
-      const seconds = durationSeconds(v.duration);
-      const durationMatch = duration === 'Any length' || (duration === 'Under 10 min' && seconds < 600) || (duration === '10–20 min' && seconds >= 600 && seconds <= 1200) || (duration === 'Over 20 min' && seconds > 1200);
-      const days = ageDays(v.age);
-      const dateMatch = date === 'Any time' || (date === 'Today' && days === 0) || (date === 'This week' && days <= 7) || (date === 'This month' && days <= 30) || (date === 'This year' && days <= 365);
-      return categoryMatch && queryMatch && durationMatch && dateMatch;
+    list = list.filter((video) => {
+      const categoryMatch =
+        category === 'All categories' || video.categoryId === category;
+      const seconds = durationSeconds(video.duration);
+      const durationMatch =
+        duration === 'Any length' ||
+        (duration === 'Under 10 min' && seconds < 600) ||
+        (duration === '10–20 min' && seconds >= 600 && seconds <= 1200) ||
+        (duration === 'Over 20 min' && seconds > 1200);
+      const days = ageDays(video.age);
+      const dateMatch =
+        date === 'Any time' ||
+        (date === 'Today' && days === 0) ||
+        (date === 'This week' && days <= 7) ||
+        (date === 'This month' && days <= 30) ||
+        (date === 'This year' && days <= 365);
+
+      return categoryMatch && durationMatch && dateMatch;
     });
+
     if (sort === 'Best match') {
-      list = [...list].sort((a, b) => {
+      list.sort((a, b) => {
         const getPersonalizedScore = (video: Video) => {
           const topic = video.category.trim().toLowerCase();
 
           const isExcluded = excludedTopics.some(
-            item => item.trim().toLowerCase() === topic
+            (item) => item.trim().toLowerCase() === topic
           );
 
           const isPreferred = preferredTopics.some(
-            item => item.trim().toLowerCase() === topic
+            (item) => item.trim().toLowerCase() === topic
           );
 
           if (isExcluded) return video.score - 15;
@@ -327,78 +507,198 @@ const categoryMatch =
         return getPersonalizedScore(b) - getPersonalizedScore(a);
       });
     }
-    if (sort === 'Newest') list = [...list].sort((a, b) => ageDays(a.age) - ageDays(b.age));
-    if (sort === 'Most popular') list = [...list].sort((a, b) => Number(b.views.split('K')[0]) - Number(a.views.split('K')[0]));
-    return list;
-  }, [active, category, date, duration, query, sort, preferredTopics, excludedTopics, liveVideos]);
-  const allVideos = [
-  ...liveVideos,
-  ...videos,
-  currentFeaturedVideo,
-  featuredVideo,
-  continueVideo,
-];
+    if (sort === 'Newest') {
+      list.sort((a, b) => ageDays(a.age) - ageDays(b.age));
+    }
+    if (sort === 'Most popular') {
+      list.sort(
+        (a, b) =>
+          Number(b.views.replace(/[^\d.]/g, '')) -
+          Number(a.views.replace(/[^\d.]/g, ''))
+      );
+    }
 
-const savedVideos = allVideos
-  .filter((video, index, list) =>
-    list.findIndex(item => item.id === video.id) === index
-  )
-  .filter(video => savedIds.includes(video.id));
+    return list;
+  }, [
+    category,
+    date,
+    duration,
+    sort,
+    preferredTopics,
+    excludedTopics,
+    liveVideos,
+    youtubeError,
+  ]);
+
+  const allVideos = [
+    ...liveVideos,
+    ...videos,
+    currentFeaturedVideo,
+    featuredVideo,
+    continueVideo,
+  ].filter(
+    (video, index, list) =>
+      list.findIndex((item) => item.id === video.id) === index
+  );
+
   const toggleSave = async (id: string) => {
-    if (!userId) {
+    const actionUserId = activeUserIdRef.current;
+    if (!actionUserId) {
       window.location.assign('/auth?next=/');
       return;
     }
-    if (savingVideoId) return;
+    if (savingVideoIdRef.current) return;
 
-    const video = allVideos.find((item) => item.id === id);
-    if (!video) return;
-
-    setSavingVideoId(id);
-    setSaveMessage('');
     const alreadySaved = savedIds.includes(id);
+    const video = allVideos.find((item) => item.id === id);
+    if (!alreadySaved && !video) return;
+
+    savingVideoIdRef.current = id;
+    setSaveMessage('');
 
     try {
       if (alreadySaved) {
         const { error } = await supabase
           .from('saved_videos')
           .delete()
-          .eq('user_id', userId)
+          .eq('user_id', actionUserId)
           .eq('video_id', id);
         if (error) throw error;
-        setSavedIds((current) => current.filter((savedId) => savedId !== id));
-        setSaveMessage('Removed from your saved videos.');
-      } else {
-        const { error } = await supabase.from('saved_videos').insert({
-          user_id: userId,
-          video_id: id,
-          title: video.title,
-          channel_title: video.creator,
-          thumbnail_url: video.thumbnail ?? null,
-          video_url:
-            video.videoUrl ??
-            `https://www.youtube.com/results?search_query=${encodeURIComponent(
-              `${video.title} ${video.creator}`
-            )}`,
-        });
-        if (error) throw error;
-        setSavedIds((current) => current.includes(id) ? current : [...current, id]);
-        setSaveMessage('Saved to your account. It will be here when you return.');
+        if (activeUserIdRef.current === actionUserId) {
+          setSavedIds((current) => current.filter((savedId) => savedId !== id));
+          setSavedVideos((current) => current.filter((item) => item.id !== id));
+          setSaveMessage('Removed from your saved videos.');
+        }
+      } else if (video) {
+        const videoUrl =
+          video.videoUrl ??
+          `https://www.youtube.com/results?search_query=${encodeURIComponent(
+            `${video.title} ${video.creator}`
+          )}`;
+
+        const { data: existingRecords, error: lookupError } = await supabase
+          .from('saved_videos')
+          .select('video_id')
+          .eq('user_id', actionUserId)
+          .eq('video_id', id)
+          .limit(1);
+        if (lookupError) throw lookupError;
+
+        if (!existingRecords?.length) {
+          const { error } = await supabase.from('saved_videos').insert({
+            user_id: actionUserId,
+            video_id: id,
+            title: video.title,
+            channel_title: video.creator,
+            thumbnail_url: video.thumbnail ?? null,
+            video_url: videoUrl,
+          });
+          if (error) throw error;
+        }
+
+        if (activeUserIdRef.current === actionUserId) {
+          setSavedIds((current) =>
+            current.includes(id) ? current : [...current, id]
+          );
+          setSavedVideos((current) => [
+            {
+              ...video,
+              videoUrl,
+              category: video.category || 'SAVED',
+            },
+            ...current.filter((item) => item.id !== id),
+          ]);
+          setSaveMessage('Saved to your account. It will be here when you return.');
+        }
       }
     } catch (error) {
       console.error('Could not update saved video:', error);
-      setSaveMessage(error instanceof Error ? error.message : 'Could not update your saved videos. Please try again.');
+      if (activeUserIdRef.current === actionUserId) {
+        setSaveMessage(
+          error instanceof Error
+            ? error.message
+            : 'Could not update your saved videos. Please try again.'
+        );
+      }
     } finally {
-      setSavingVideoId(null);
+      if (savingVideoIdRef.current === id) {
+        savingVideoIdRef.current = null;
+      }
     }
   };
-  const clearFilters = () => { setActive('All'); setCategory('All categories'); setDuration('Any length'); setDate('Any time'); setSort('Best match'); setQuery(''); };
+  const clearFilters = () => {
+    setCategory('All categories');
+    setDuration('Any length');
+    setDate('Any time');
+    setSort('Best match');
+    setQuery('');
+    void performSearch('');
+  };
   const scrollTo = (id: string) => { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); setMobileMenuOpen(false); setAccountOpen(false); };
 
   return <main id="top">
     <nav className="topbar" aria-label="Main navigation">
       <a className="wordmark" href="#top">Discoverly</a>
-      <form className="nav-search" role="search" onSubmit={e => { e.preventDefault(); scrollTo('trending'); }}><span aria-hidden="true">⌕</span><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search videos, topics, or creators" aria-label="Search videos, topics, or creators" /><button className="search-submit" type="submit" aria-label="Search">↵</button></form>
+      <form
+        ref={searchFormRef}
+        className="nav-search"
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void performSearch(query);
+          scrollTo('trending');
+        }}
+      >
+        <span aria-hidden="true">⌕</span>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => setSearchFocused(true)}
+          onClick={() => setSearchFocused(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setSearchFocused(false);
+          }}
+          placeholder="Search videos, topics, or creators"
+          aria-label="Search videos, topics, or creators"
+          role="combobox"
+          aria-haspopup="listbox"
+          aria-expanded={searchFocused && searchSuggestions.length > 0}
+          aria-controls="search-suggestions"
+          aria-autocomplete="list"
+        />
+        <button className="search-submit" type="submit" aria-label="Search">
+          ↵
+        </button>
+        {searchFocused && searchSuggestions.length > 0 && (
+          <div
+            className="search-suggestions"
+            id="search-suggestions"
+            role="listbox"
+            aria-label={query.trim() ? 'Search suggestions' : 'Popular searches'}
+          >
+            <p className="search-suggestions-label">
+              {query.trim() ? 'Suggestions' : 'Popular searches'}
+            </p>
+            {searchSuggestions.map((suggestion) => (
+              <button
+                className="search-suggestion"
+                key={suggestion}
+                type="button"
+                role="option"
+                aria-selected="false"
+                onClick={() => {
+                  setQuery(suggestion);
+                  void performSearch(suggestion);
+                  scrollTo('trending');
+                }}
+              >
+                <span aria-hidden="true">⌕</span>
+                <strong>{suggestion}</strong>
+              </button>
+            ))}
+          </div>
+        )}
+      </form>
       <div className="nav-links"><a href="#top">Home</a><a href="#trending">Trending</a><a href="#interests">Categories</a><a href="#watch-later">Watch Later{savedIds.length > 0 ? ` (${savedIds.length})` : ''}</a>{!userEmail && <><a className="nav-auth-link" href="/auth">Log in</a><a className="nav-auth-button" href="/auth?mode=signup">Sign up</a></>}{userEmail && <div className="account-wrap"><button className="avatar" aria-label="Open account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen(v => !v)}>{userEmail.slice(0, 1).toUpperCase()}</button>{accountOpen && <div className="account-menu"><strong>Your account</strong><span>{userEmail}</span><button onClick={() => {
   setAccountOpen(false);
   window.location.assign('/preferences');
@@ -460,7 +760,7 @@ const savedVideos = allVideos
     </nav>
     <div className="page-wrap">
       <section className="hero"><div className="hero-copy"><div className="hero-kicker"><i/> CURATED FOR YOUR CURIOSITY</div><h1>Find your next favorite<br className="desktop-break"/> video</h1><p>Discover thoughtful stories, fresh ideas, and the videos worth making time for.</p><button className="compass" aria-label="Explore videos" title="Explore videos" onClick={() => scrollTo('trending')}>⊙</button></div><div className="hero-orb" aria-hidden="true"><div className="orb-core"/></div></section>
-      <section className="interests" id="interests"><div className="section-kicker"><i/> BROWSE BY INTEREST</div><div className="section-head"><h2>A little something for every mood</h2><button className="clear" onClick={clearFilters}>Clear filters</button></div><div className="chips" aria-label="Filter by interest">{interests.map(i => <button key={i} className={`chip ${active===i?'active':''}`} aria-pressed={active===i} onClick={() => setActive(i)}>{active===i && <span>• </span>}{i}</button>)}</div><div className="filter-panel"><label>
+      <section className="interests" id="interests"><div className="section-kicker"><i/> BROWSE BY INTEREST</div><div className="section-head"><h2>Explore videos by category</h2><button className="clear" onClick={clearFilters}>Clear filters</button></div><div className="filter-panel"><label>
   CATEGORY
   <select
   value={category}
@@ -468,42 +768,17 @@ const savedVideos = allVideos
     const selectedCategory = e.target.value;
 
     setCategory(selectedCategory);
-    setYoutubeError('');
-
-    if (selectedCategory === 'All categories') {
-      setYoutubeLoading(true);
-
-      try {
-        const response = await fetch('/api/youtube?q=videos');
-        if (!response.ok) throw new Error('Could not load videos.');
-
-        const data = await response.json();
-        setLiveVideos(convertYouTubeVideos(data.videos ?? []));
-        setYoutubeCategories(data.categories ?? []);
-      } catch (error) {
-        setYoutubeError(
-          error instanceof Error ? error.message : 'Could not load videos.'
-        );
-      } finally {
-        setYoutubeLoading(false);
-      }
-
-      return;
-    }
-
     setYoutubeLoading(true);
+    setYoutubeError('');
+    setNextPageToken(null);
+    setLiveVideos([]);
 
     try {
-      const response = await fetch(
-        `/api/youtube?q=videos&categoryId=${encodeURIComponent(selectedCategory)}`
-      );
-
-      if (!response.ok) throw new Error('Could not load this category.');
-
-      const data = await response.json();
+      const data = await fetchVideos(searchTerm, selectedCategory);
 
       setLiveVideos(convertYouTubeVideos(data.videos ?? []));
       setYoutubeCategories(data.categories ?? []);
+      setNextPageToken(data.nextPageToken ?? null);
     } catch (error) {
       setYoutubeError(
         error instanceof Error ? error.message : 'Could not load this category.'
@@ -521,7 +796,7 @@ const savedVideos = allVideos
     ))}
   </select>
 </label><label>DURATION<select value={duration} onChange={e=>setDuration(e.target.value)}>{['Any length','Under 10 min','10–20 min','Over 20 min'].map(v=><option key={v}>{v}</option>)}</select></label><label>UPLOAD DATE<select value={date} onChange={e=>setDate(e.target.value)}>{['Any time','Today','This week','This month','This year'].map(v=><option key={v}>{v}</option>)}</select></label><label>SORT BY<select value={sort} onChange={e=>setSort(e.target.value)}>{['Most popular','Best match','Newest'].map(v=><option key={v}>{v}</option>)}</select></label></div></section>
-      <section className="featured">
+      {searchTerm === '' && <section className="featured">
         <div className="section-kicker"><i/> EDITOR&apos;S PICK</div>
         <h2>Featured this week</h2>
 
@@ -591,10 +866,65 @@ const savedVideos = allVideos
             </div>
           </div>
         </article>
-      </section>
-      <section className="trending" id="trending"><div className="section-kicker"><i/> POPULAR RIGHT NOW</div><div className="section-head results-head"><h2>Trending now</h2><span className="result-count">{filtered.length} {filtered.length === 1 ? 'video' : 'videos'}</span></div>{youtubeLoading && liveVideos.length === 0 && <p role="status" className="preview-note">Loading videos from YouTube…</p>}{youtubeError && <p role="alert" className="preview-note">{youtubeError} Showing sample videos instead.</p>}<div className="video-grid">{filtered.map(v=><VideoCard key={v.id} video={v} saved={savedIds.includes(v.id)} onToggleSave={toggleSave} onPreview={setSelectedVideo}/>)}</div>{filtered.length===0 && <div className="empty"><p>No preview videos match those filters.</p><button className="clear" onClick={clearFilters}>Clear filters and try again</button></div>}<p className="preview-note">
+      </section>}
+      <section className="trending" id="trending"><div className="section-kicker"><i/> POPULAR RIGHT NOW</div><div className="section-head results-head"><h2>Trending now</h2><span className="result-count">{filtered.length} {filtered.length === 1 ? 'video' : 'videos'}</span></div>{youtubeLoading && liveVideos.length === 0 && <p role="status" className="preview-note">Loading videos from YouTube…</p>}{youtubeError && <p role="alert" className="preview-note">{youtubeError}{liveVideos.length === 0 ? ' Showing sample videos instead.' : ''}</p>}<div className="video-grid">{filtered.map(v=><VideoCard key={v.id} video={v} saved={savedIds.includes(v.id)} onToggleSave={toggleSave} onPreview={setSelectedVideo}/>)}</div>{nextPageToken && <div className="load-more-wrap"><button className="secondary-button" onClick={loadMoreVideos} disabled={loadingMore}>{loadingMore ? 'Loading videos…' : 'Show more videos'}</button></div>}{filtered.length===0 && !youtubeLoading && <div className="empty"><p>No videos match those filters. Try another search or category.</p><button className="clear" onClick={clearFilters}>Clear filters and try again</button></div>}<p className="preview-note">
         Discover real videos from YouTube. Personalized relevance scoring is still being improved.</p></section>
-      <section className="continue" id="watch-later"><div className="section-kicker"><i/> YOUR COLLECTION</div><div className="section-head"><h2>Watch Later</h2><span className="result-count">{savedVideos.length} saved</span></div>{saveMessage && <p role="status" aria-live="polite" className="preview-note">{saveMessage}</p>}{!userId && authReady && <p className="preview-note">Log in to save videos to your personal account.</p>}{savedVideos.length ? <div className="video-grid saved-grid">{savedVideos.map(v => <VideoCard key={v.id} video={v} saved onToggleSave={toggleSave} onPreview={setSelectedVideo}/>)}</div> : <div className="saved-empty"><span className="saved-empty-icon">♧</span><div><h3>Your list starts here</h3><p>{userId ? 'Use the bookmark icon on any video to keep it here for later.' : 'Log in, then use the bookmark icon to save videos to your account.'}</p></div><button className="secondary-button" onClick={() => userId ? scrollTo('trending') : window.location.assign('/auth')}>{userId ? 'Explore videos' : 'Log in to save videos'}</button></div>}</section>
+      <section className="continue" id="watch-later">
+        <div className="section-kicker"><i /> YOUR COLLECTION</div>
+        <div className="section-head">
+          <h2>Watch Later</h2>
+          <span className="result-count">{savedVideos.length} saved</span>
+        </div>
+        {saveMessage && (
+          <p role="status" aria-live="polite" className="preview-note">
+            {saveMessage}
+          </p>
+        )}
+        {!userId && authReady && (
+          <p className="preview-note">
+            Log in to save videos to your personal account.
+          </p>
+        )}
+        {savedVideosLoading ? (
+          <p role="status" className="preview-note">
+            Loading your saved videos…
+          </p>
+        ) : savedVideos.length ? (
+          <div className="video-grid saved-grid">
+            {savedVideos.map((video) => (
+              <VideoCard
+                key={video.id}
+                video={video}
+                saved
+                onToggleSave={toggleSave}
+                onPreview={setSelectedVideo}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="saved-empty">
+            <span className="saved-empty-icon">♧</span>
+            <div>
+              <h3>Your list starts here</h3>
+              <p>
+                {userId
+                  ? 'Use the bookmark icon on any video to keep it here for later.'
+                  : 'Log in, then use the bookmark icon to save videos to your account.'}
+              </p>
+            </div>
+            <button
+              className="secondary-button"
+              onClick={() =>
+                userId
+                  ? scrollTo('trending')
+                  : window.location.assign('/auth')
+              }
+            >
+              {userId ? 'Explore videos' : 'Log in to save videos'}
+            </button>
+          </div>
+        )}
+      </section>
       <section className="continue" id="continue-watching">
   <div className="section-kicker">
     <i /> PICK UP WHERE YOU LEFT OFF
