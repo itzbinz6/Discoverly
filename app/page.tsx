@@ -6,6 +6,7 @@ import { createClient } from '../lib/supabase/client';
 type Video = {
   id: string;
   category: string;
+  categoryId?: string;
   title: string;
   creator: string;
   views: string;
@@ -79,12 +80,20 @@ type YouTubeVideo = {
   publishedAt: string;
   duration: string;
   videoUrl: string;
+  category: string;
+  categoryId: string;
+};
+
+type YouTubeCategory = {
+  id: string;
+  name: string;
 };
 
 const convertYouTubeVideos = (items: YouTubeVideo[]): Video[] => {
   return items.map((item) => ({
     id: item.id,
-    category: 'TECHNOLOGY',
+    category: item.category.toUpperCase(),
+    categoryId: item.categoryId,
     title: item.title,
     creator: item.creator,
     views: formatYouTubeViews(item.views),
@@ -98,7 +107,17 @@ const convertYouTubeVideos = (items: YouTubeVideo[]): Video[] => {
   }));
 };
 
-const durationSeconds = (value: string) => {const [m, s] = value.split(':').map(Number); return m * 60 + s; };
+const durationSeconds = (value: string) => {
+  const parts = value.split(':').map(Number);
+
+  if (parts.length === 3) {
+    const [hours, minutes, seconds] = parts;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  const [minutes, seconds] = parts;
+  return minutes * 60 + seconds;
+};
 const ageDays = (age: string) => { const n = Number(age.match(/\d+/)?.[0] ?? 0); if (age.includes('year')) return n * 365; if (age.includes('month')) return n * 30; if (age.includes('week')) return n * 7; return n; };
 function Score({ value }: { value: number }) { return <div className="score-ring" aria-label={`Example match score ${value}`}><span>{value}</span></div>; }
 function VideoCard({ video, saved, onToggleSave, onPreview }: { video: Video; saved: boolean; onToggleSave: (id: string) => void; onPreview: (video: Video) => void }) {
@@ -132,9 +151,11 @@ export default function Home() {
   const [sort, setSort] = useState('Best match');
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [liveVideos, setLiveVideos] = useState<Video[]>([]);
+  const [youtubeCategories, setYoutubeCategories] = useState<YouTubeCategory[]>([]);
   const [youtubeLoading, setYoutubeLoading] = useState(false);
   const [youtubeError, setYoutubeError] = useState('');
   const currentFeaturedVideo = liveVideos[0] ?? featuredVideo;
+  const nextVideoToExplore = liveVideos[1] ?? liveVideos[0] ?? null;
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -222,7 +243,7 @@ export default function Home() {
     setYoutubeError('');
 
     try {
-      const response = await fetch('/api/youtube?q=technology');
+      const response = await fetch('/api/youtube?q=videos');
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
@@ -231,15 +252,18 @@ export default function Home() {
           errorData?.error || `YouTube request failed (${response.status}).`
         );
       }
+
       const data = await response.json();
 
       if (!mounted) return;
 
       setLiveVideos(convertYouTubeVideos(data.videos ?? []));
+      setYoutubeCategories(data.categories ?? []);
     } catch (error) {
       if (!mounted) return;
 
       console.error('YouTube fetch error:', error);
+
       setYoutubeError(
         error instanceof Error
           ? error.message
@@ -266,7 +290,14 @@ export default function Home() {
 
   const filtered = useMemo(() => {
     let list = (liveVideos.length > 0 ? liveVideos : videos).filter(v => {
-      const categoryMatch = (active === 'All' || v.category.toLowerCase() === active.toLowerCase()) && (category === 'All categories' || v.category.toLowerCase() === category.toLowerCase());
+      const activeMatch =
+  active === 'All' ||
+  v.category.toLowerCase() === active.toLowerCase() ||
+  (active === 'Technology' && v.category.toLowerCase() === 'science & technology');
+
+const categoryMatch =
+  activeMatch &&
+  (category === 'All categories' || v.categoryId === category);
       const queryMatch = `${v.title} ${v.creator} ${v.category}`.toLowerCase().includes(query.trim().toLowerCase());
       const seconds = durationSeconds(v.duration);
       const durationMatch = duration === 'Any length' || (duration === 'Under 10 min' && seconds < 600) || (duration === '10–20 min' && seconds >= 600 && seconds <= 1200) || (duration === 'Over 20 min' && seconds > 1200);
@@ -429,7 +460,67 @@ const savedVideos = allVideos
     </nav>
     <div className="page-wrap">
       <section className="hero"><div className="hero-copy"><div className="hero-kicker"><i/> CURATED FOR YOUR CURIOSITY</div><h1>Find your next favorite<br className="desktop-break"/> video</h1><p>Discover thoughtful stories, fresh ideas, and the videos worth making time for.</p><button className="compass" aria-label="Explore videos" title="Explore videos" onClick={() => scrollTo('trending')}>⊙</button></div><div className="hero-orb" aria-hidden="true"><div className="orb-core"/></div></section>
-      <section className="interests" id="interests"><div className="section-kicker"><i/> BROWSE BY INTEREST</div><div className="section-head"><h2>A little something for every mood</h2><button className="clear" onClick={clearFilters}>Clear filters</button></div><div className="chips" aria-label="Filter by interest">{interests.map(i => <button key={i} className={`chip ${active===i?'active':''}`} aria-pressed={active===i} onClick={() => setActive(i)}>{active===i && <span>• </span>}{i}</button>)}</div><div className="filter-panel"><label>CATEGORY<select value={category} onChange={e=>setCategory(e.target.value)}>{['All categories','Technology','Design','Business','Science','Travel','Music','Gaming'].map(v=><option key={v}>{v}</option>)}</select></label><label>DURATION<select value={duration} onChange={e=>setDuration(e.target.value)}>{['Any length','Under 10 min','10–20 min','Over 20 min'].map(v=><option key={v}>{v}</option>)}</select></label><label>UPLOAD DATE<select value={date} onChange={e=>setDate(e.target.value)}>{['Any time','Today','This week','This month','This year'].map(v=><option key={v}>{v}</option>)}</select></label><label>SORT BY<select value={sort} onChange={e=>setSort(e.target.value)}>{['Most popular','Best match','Newest'].map(v=><option key={v}>{v}</option>)}</select></label></div></section>
+      <section className="interests" id="interests"><div className="section-kicker"><i/> BROWSE BY INTEREST</div><div className="section-head"><h2>A little something for every mood</h2><button className="clear" onClick={clearFilters}>Clear filters</button></div><div className="chips" aria-label="Filter by interest">{interests.map(i => <button key={i} className={`chip ${active===i?'active':''}`} aria-pressed={active===i} onClick={() => setActive(i)}>{active===i && <span>• </span>}{i}</button>)}</div><div className="filter-panel"><label>
+  CATEGORY
+  <select
+  value={category}
+  onChange={async (e) => {
+    const selectedCategory = e.target.value;
+
+    setCategory(selectedCategory);
+    setYoutubeError('');
+
+    if (selectedCategory === 'All categories') {
+      setYoutubeLoading(true);
+
+      try {
+        const response = await fetch('/api/youtube?q=videos');
+        if (!response.ok) throw new Error('Could not load videos.');
+
+        const data = await response.json();
+        setLiveVideos(convertYouTubeVideos(data.videos ?? []));
+        setYoutubeCategories(data.categories ?? []);
+      } catch (error) {
+        setYoutubeError(
+          error instanceof Error ? error.message : 'Could not load videos.'
+        );
+      } finally {
+        setYoutubeLoading(false);
+      }
+
+      return;
+    }
+
+    setYoutubeLoading(true);
+
+    try {
+      const response = await fetch(
+        `/api/youtube?q=videos&categoryId=${encodeURIComponent(selectedCategory)}`
+      );
+
+      if (!response.ok) throw new Error('Could not load this category.');
+
+      const data = await response.json();
+
+      setLiveVideos(convertYouTubeVideos(data.videos ?? []));
+      setYoutubeCategories(data.categories ?? []);
+    } catch (error) {
+      setYoutubeError(
+        error instanceof Error ? error.message : 'Could not load this category.'
+      );
+    } finally {
+      setYoutubeLoading(false);
+    }
+  }}
+>
+    <option value="All categories">All categories</option>
+    {youtubeCategories.map(item => (
+      <option key={item.id} value={item.id}>
+        {item.name}
+      </option>
+    ))}
+  </select>
+</label><label>DURATION<select value={duration} onChange={e=>setDuration(e.target.value)}>{['Any length','Under 10 min','10–20 min','Over 20 min'].map(v=><option key={v}>{v}</option>)}</select></label><label>UPLOAD DATE<select value={date} onChange={e=>setDate(e.target.value)}>{['Any time','Today','This week','This month','This year'].map(v=><option key={v}>{v}</option>)}</select></label><label>SORT BY<select value={sort} onChange={e=>setSort(e.target.value)}>{['Most popular','Best match','Newest'].map(v=><option key={v}>{v}</option>)}</select></label></div></section>
       <section className="featured">
         <div className="section-kicker"><i/> EDITOR&apos;S PICK</div>
         <h2>Featured this week</h2>
@@ -504,7 +595,53 @@ const savedVideos = allVideos
       <section className="trending" id="trending"><div className="section-kicker"><i/> POPULAR RIGHT NOW</div><div className="section-head results-head"><h2>Trending now</h2><span className="result-count">{filtered.length} {filtered.length === 1 ? 'video' : 'videos'}</span></div>{youtubeLoading && liveVideos.length === 0 && <p role="status" className="preview-note">Loading videos from YouTube…</p>}{youtubeError && <p role="alert" className="preview-note">{youtubeError} Showing sample videos instead.</p>}<div className="video-grid">{filtered.map(v=><VideoCard key={v.id} video={v} saved={savedIds.includes(v.id)} onToggleSave={toggleSave} onPreview={setSelectedVideo}/>)}</div>{filtered.length===0 && <div className="empty"><p>No preview videos match those filters.</p><button className="clear" onClick={clearFilters}>Clear filters and try again</button></div>}<p className="preview-note">
         Discover real videos from YouTube. Personalized relevance scoring is still being improved.</p></section>
       <section className="continue" id="watch-later"><div className="section-kicker"><i/> YOUR COLLECTION</div><div className="section-head"><h2>Watch Later</h2><span className="result-count">{savedVideos.length} saved</span></div>{saveMessage && <p role="status" aria-live="polite" className="preview-note">{saveMessage}</p>}{!userId && authReady && <p className="preview-note">Log in to save videos to your personal account.</p>}{savedVideos.length ? <div className="video-grid saved-grid">{savedVideos.map(v => <VideoCard key={v.id} video={v} saved onToggleSave={toggleSave} onPreview={setSelectedVideo}/>)}</div> : <div className="saved-empty"><span className="saved-empty-icon">♧</span><div><h3>Your list starts here</h3><p>{userId ? 'Use the bookmark icon on any video to keep it here for later.' : 'Log in, then use the bookmark icon to save videos to your account.'}</p></div><button className="secondary-button" onClick={() => userId ? scrollTo('trending') : window.location.assign('/auth')}>{userId ? 'Explore videos' : 'Log in to save videos'}</button></div>}</section>
-      <section className="continue" id="continue-watching"><div className="section-kicker"><i/> PICK UP WHERE YOU LEFT OFF</div><h2>Continue watching</h2><article className="continue-card"><div className="continue-art"/><div className="continue-info"><div className="category-label">DESIGN</div><h3>A New Language for Public Spaces</h3><p>City Form · 5:14 remaining</p><div className="progress"><span/></div><button className="text-action" onClick={() => setSelectedVideo(continueVideo)}>Continue video ↗</button></div></article></section>
+      <section className="continue" id="continue-watching">
+  <div className="section-kicker">
+    <i /> PICK UP WHERE YOU LEFT OFF
+  </div>
+
+  <h2>Continue watching</h2>
+
+  {nextVideoToExplore ? (
+    <article className="continue-card">
+      <div
+        className="continue-art"
+        style={
+          nextVideoToExplore.thumbnail
+            ? {
+                backgroundImage: `url("${nextVideoToExplore.thumbnail}")`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+              }
+            : undefined
+        }
+      />
+
+      <div className="continue-info">
+        <div className="category-label">
+          {nextVideoToExplore.category}
+        </div>
+
+        <h3>{nextVideoToExplore.title}</h3>
+
+        <p>
+          {nextVideoToExplore.creator} · {nextVideoToExplore.duration}
+        </p>
+
+        <button
+          className="text-action"
+          onClick={() => setSelectedVideo(nextVideoToExplore)}
+        >
+          Explore video ↗
+        </button>
+      </div>
+    </article>
+  ) : (
+    <p className="preview-note">
+      Your watch history will appear here when playback tracking is available.
+    </p>
+  )}
+</section>
       <footer><b>Discoverly</b><span>Find videos worth your time.</span><a href="#top">Back to top ↑</a></footer>
     </div>
     {selectedVideo && (
