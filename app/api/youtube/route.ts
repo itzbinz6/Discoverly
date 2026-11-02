@@ -3,6 +3,31 @@ import { NextResponse } from "next/server";
 
 const YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3";
 
+type YouTubeSearchResponse = {
+  items?: Array<{ id?: { videoId?: string } }>;
+};
+
+type YouTubeVideo = {
+  id: string;
+  snippet: {
+    title: string;
+    channelTitle: string;
+    publishedAt: string;
+    categoryId?: string;
+    thumbnails?: {
+      high?: { url: string };
+      medium?: { url: string };
+      default?: { url: string };
+    };
+  };
+  contentDetails: { duration: string };
+  statistics?: { viewCount?: string };
+};
+
+type YouTubeVideosResponse = {
+  items?: YouTubeVideo[];
+};
+
 export async function GET(request: Request) {
   try {
     const apiKey = process.env.YOUTUBE_API_KEY;
@@ -46,10 +71,10 @@ export async function GET(request: Request) {
       );
     }
 
-    const searchData = await searchResponse.json();
+    const searchData = (await searchResponse.json()) as YouTubeSearchResponse;
     const videoIds = (searchData.items ?? [])
       .map((item: { id?: { videoId?: string } }) => item.id?.videoId)
-      .filter(Boolean);
+      .filter((id): id is string => Boolean(id));
 
     if (videoIds.length === 0) {
       return NextResponse.json({ videos: [] });
@@ -71,9 +96,9 @@ export async function GET(request: Request) {
       );
     }
 
-    const detailsData = await detailsResponse.json();
+    const detailsData = (await detailsResponse.json()) as YouTubeVideosResponse;
 
-    const videos = (detailsData.items ?? []).map((video: any) => ({
+    const videos = (detailsData.items ?? []).map((video) => ({
       id: video.id,
       title: video.snippet.title,
       creator: video.snippet.channelTitle,
