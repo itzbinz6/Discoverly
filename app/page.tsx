@@ -165,6 +165,8 @@ export default function Home() {
   const [liveVideos, setLiveVideos] = useState<Video[]>([]);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const videoRequestGenerationRef = useRef(0);
+  const loadingMoreLockRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [youtubeCategories, setYoutubeCategories] = useState<YouTubeCategory[]>([]);
   const [youtubeLoading, setYoutubeLoading] = useState(false);
@@ -287,8 +289,6 @@ export default function Home() {
             'Could not load saved videos:',
             savedVideosResult.error.message
           );
-          setSavedIds([]);
-          setSavedVideos([]);
           setSaveMessage('Could not load your saved videos. Please refresh and try again.');
           setSavedVideosLoading(false);
           return;
@@ -297,12 +297,6 @@ export default function Home() {
         const loadedSavedVideos = new Map<string, Video>();
         for (const row of savedVideosResult.data ?? []) {
           if (loadedSavedVideos.has(row.video_id)) continue;
-
-          const savedAt = row.created_at ? new Date(row.created_at) : null;
-          const age =
-            savedAt && !Number.isNaN(savedAt.getTime())
-              ? formatYouTubeAge(savedAt.toISOString())
-              : 'Saved video';
 
           loadedSavedVideos.set(row.video_id, {
             id: row.video_id,
@@ -314,7 +308,7 @@ export default function Home() {
               `https://www.youtube.com/watch?v=${encodeURIComponent(row.video_id)}`,
             category: 'SAVED',
             views: '—',
-            age,
+            age: 'Publication date unavailable',
             duration: '—',
             score: 0,
             tone: 'tech',
@@ -337,8 +331,6 @@ export default function Home() {
         }
 
         console.error('Could not load saved videos:', error);
-        setSavedIds([]);
-        setSavedVideos([]);
         setSaveMessage('Could not load your saved videos. Please refresh and try again.');
         setSavedVideosLoading(false);
       }
@@ -388,10 +380,18 @@ export default function Home() {
     return response.json();
   };
 
+  const invalidateVideoRequests = () => {
+    const generation = ++videoRequestGenerationRef.current;
+    loadingMoreLockRef.current = false;
+    setLoadingMore(false);
+    return generation;
+  };
+
   const performSearch = async (
     term: string,
     selectedCategory = category
   ) => {
+    const requestGeneration = invalidateVideoRequests();
     setYoutubeLoading(true);
     setYoutubeError('');
     setNextPageToken(null);
@@ -407,45 +407,65 @@ export default function Home() {
         selectedCategory
       );
 
+      if (requestGeneration !== videoRequestGenerationRef.current) return;
+
       setLiveVideos(convertYouTubeVideos(data.videos ?? []));
       setYoutubeCategories(data.categories ?? []);
       setNextPageToken(data.nextPageToken ?? null);
     } catch (error) {
-      console.error('YouTube search error:', error);
-      setYoutubeError(
-        error instanceof Error ? error.message : 'Something went wrong while searching.'
-      );
+      if (requestGeneration === videoRequestGenerationRef.current) {
+        console.error('YouTube search error:', error);
+        setYoutubeError(
+          error instanceof Error ? error.message : 'Something went wrong while searching.'
+        );
+      }
     } finally {
-      setYoutubeLoading(false);
+      if (requestGeneration === videoRequestGenerationRef.current) {
+        setYoutubeLoading(false);
+      }
     }
   };
 
   const loadMoreVideos = async () => {
-    if (!nextPageToken || loadingMore) return;
+    if (!nextPageToken || loadingMoreLockRef.current) return;
 
+    loadingMoreLockRef.current = true;
+    const requestGeneration = videoRequestGenerationRef.current;
+    const requestPageToken = nextPageToken;
     setLoadingMore(true);
     setYoutubeError('');
 
     try {
-      const data = await fetchVideos(searchTerm, category, nextPageToken);
+      const data = await fetchVideos(searchTerm, category, requestPageToken);
+
+      if (requestGeneration !== videoRequestGenerationRef.current) return;
+
       const newVideos = convertYouTubeVideos(data.videos ?? []);
 
       setLiveVideos((current) => {
         const existingIds = new Set(current.map((video) => video.id));
-        return [
-          ...current,
-          ...newVideos.filter((video) => !existingIds.has(video.id)),
-        ];
+        const videosToAppend = newVideos.filter((video) => {
+          if (existingIds.has(video.id)) return false;
+          existingIds.add(video.id);
+          return true;
+        });
+
+        return [...current, ...videosToAppend];
       });
 
       setNextPageToken(data.nextPageToken ?? null);
     } catch (error) {
-      console.error('Could not load more videos:', error);
-      setYoutubeError(
-        error instanceof Error ? error.message : 'Could not load more videos.'
-      );
+      if (requestGeneration === videoRequestGenerationRef.current) {
+        console.error('Could not load more videos:', error);
+        setYoutubeError(
+          error instanceof Error ? error.message : 'Could not load more videos.'
+        );
+      }
     } finally {
-      setLoadingMore(false);
+      if (requestGeneration === videoRequestGenerationRef.current) {
+        loadingMoreLockRef.current = false;
+        setLoadingMore(false);
+      }
     }
   };
 
@@ -603,6 +623,9 @@ export default function Home() {
           setSavedVideos((current) => [
             {
               ...video,
+              age: video.publishedAt
+                ? formatYouTubeAge(video.publishedAt)
+                : 'Publication date unavailable',
               videoUrl,
               category: video.category || 'SAVED',
             },
@@ -766,6 +789,7 @@ export default function Home() {
   value={category}
   onChange={async (e) => {
     const selectedCategory = e.target.value;
+    const requestGeneration = invalidateVideoRequests();
 
     setCategory(selectedCategory);
     setYoutubeLoading(true);
@@ -776,15 +800,21 @@ export default function Home() {
     try {
       const data = await fetchVideos(searchTerm, selectedCategory);
 
+      if (requestGeneration !== videoRequestGenerationRef.current) return;
+
       setLiveVideos(convertYouTubeVideos(data.videos ?? []));
       setYoutubeCategories(data.categories ?? []);
       setNextPageToken(data.nextPageToken ?? null);
     } catch (error) {
-      setYoutubeError(
-        error instanceof Error ? error.message : 'Could not load this category.'
-      );
+      if (requestGeneration === videoRequestGenerationRef.current) {
+        setYoutubeError(
+          error instanceof Error ? error.message : 'Could not load this category.'
+        );
+      }
     } finally {
-      setYoutubeLoading(false);
+      if (requestGeneration === videoRequestGenerationRef.current) {
+        setYoutubeLoading(false);
+      }
     }
   }}
 >
