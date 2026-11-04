@@ -3,6 +3,15 @@ import { NextResponse } from "next/server";
 
 const YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3";
 
+function noStoreJson(body: unknown, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store, max-age=0",
+    },
+  });
+}
+
 type YouTubeSearchResponse = {
   nextPageToken?: string;
   items?: Array<{ id?: { videoId?: string } }>;
@@ -26,7 +35,14 @@ type YouTubeVideo = {
 };
 
 type YouTubeVideosResponse = {
+  nextPageToken?: string;
   items?: YouTubeVideo[];
+};
+
+type YouTubeApiErrorResponse = {
+  error?: {
+    errors?: Array<{ reason?: string }>;
+  };
 };
 
 type YouTubeCategoriesResponse = {
@@ -40,33 +56,161 @@ type YouTubeCategoriesResponse = {
 };
 
 export async function GET(request: Request) {
+  let requestMode = "search";
+
   try {
     const apiKey = process.env.YOUTUBE_API_KEY;
 
     if (!apiKey) {
-      return NextResponse.json(
+      return noStoreJson(
         { error: "YouTube API key is not configured." },
-        { status: 500 }
+        500
       );
     }
 
     const { searchParams } = new URL(request.url);
+    requestMode = searchParams.get("mode") ?? "search";
     const query = searchParams.get("q")?.trim() ?? "";
     const categoryId = searchParams.get("categoryId")?.trim();
     const pageToken = searchParams.get("pageToken")?.trim();
+    const requestedMaxResults = searchParams.get("maxResults");
+    const maxResults = requestedMaxResults
+      ? Number(requestedMaxResults)
+      : requestMode === "trending"
+        ? 9
+        : 30;
 
-    if (!query) {
-      return NextResponse.json(
-        { error: "A search query is required." },
-        { status: 400 }
-      );
+    if (requestMode !== "search" && requestMode !== "trending") {
+      return noStoreJson({ error: "Invalid YouTube request mode." }, 400);
+    }
+
+    if (
+      !Number.isInteger(maxResults) ||
+      maxResults < 1 ||
+      maxResults > 50
+    ) {
+      return noStoreJson({ error: "Invalid YouTube maxResults value." }, 400);
     }
 
     if (categoryId && !/^\d+$/.test(categoryId)) {
-      return NextResponse.json(
-        { error: "Invalid YouTube category ID." },
-        { status: 400 }
+      return noStoreJson({ error: "Invalid YouTube category ID." }, 400);
+    }
+
+    if (requestMode === "trending") {
+      const trendingUrl = new URL(`${YOUTUBE_API_URL}/videos`);
+      const trendingParams = new URLSearchParams({
+        part: "snippet,contentDetails,statistics",
+        chart: "mostPopular",
+        maxResults: String(maxResults),
+        regionCode: "NG",
+        key: apiKey,
+      });
+
+      if (categoryId) {
+        trendingParams.set("videoCategoryId", categoryId);
+      }
+
+      if (pageToken) {
+        trendingParams.set("pageToken", pageToken);
+      }
+
+      trendingUrl.search = trendingParams.toString();
+
+      const categoriesUrl = new URL(`${YOUTUBE_API_URL}/videoCategories`);
+      categoriesUrl.search = new URLSearchParams({
+        part: "snippet",
+        regionCode: "NG",
+        key: apiKey,
+      }).toString();
+
+      const [trendingResponse, categoriesResponse] = await Promise.all([
+        fetch(trendingUrl, { cache: "no-store" }),
+        fetch(categoriesUrl, { next: { revalidate: 3600 } }),
+      ]);
+
+      if (!trendingResponse.ok) {
+        const errorData =
+          (await trendingResponse.json().catch(() => null)) as
+            | YouTubeApiErrorResponse
+            | null;
+        const reason = errorData?.error?.errors?.[0]?.reason ?? "";
+        const errorCode =
+          reason === "videoChartNotFound"
+            ? "chart_unavailable"
+            : [
+                  "quotaExceeded",
+                  "dailyLimitExceeded",
+                  "rateLimitExceeded",
+                  "userRateLimitExceeded",
+                ].includes(reason)
+              ? "quota_exceeded"
+              : "youtube_api_error";
+
+        console.error("YouTube Trending error:", errorData ?? trendingResponse.statusText);
+
+        return noStoreJson(
+          {
+            error:
+              errorCode === "chart_unavailable"
+                ? "YouTube's most-popular chart is unavailable for this region or category."
+                : errorCode === "quota_exceeded"
+                  ? "The YouTube API quota has been exceeded. Please try again later."
+                  : "Could not retrieve YouTube Trending videos.",
+            errorCode,
+          },
+          trendingResponse.status
+        );
+      }
+
+      const trendingData =
+        (await trendingResponse.json()) as YouTubeVideosResponse;
+      const categoriesData = categoriesResponse.ok
+        ? ((await categoriesResponse.json()) as YouTubeCategoriesResponse)
+        : null;
+      const categories = (categoriesData?.items ?? []).filter(
+        (item) => item.snippet.assignable
       );
+      const categoryNames = new Map(
+        categories.map((item) => [item.id, item.snippet.title])
+      );
+
+      const videos = (trendingData.items ?? []).map((video) => ({
+        id: video.id,
+        title: video.snippet.title,
+        creator: video.snippet.channelTitle,
+        thumbnail:
+          video.snippet.thumbnails?.high?.url ??
+          video.snippet.thumbnails?.medium?.url ??
+          video.snippet.thumbnails?.default?.url ??
+          "",
+        views: Number(video.statistics?.viewCount ?? 0),
+        publishedAt: video.snippet.publishedAt,
+        duration: video.contentDetails.duration,
+        categoryId: video.snippet.categoryId ?? "",
+        category:
+          categoryNames.get(video.snippet.categoryId ?? "") ?? "Other",
+        videoUrl: `https://www.youtube.com/watch?v=${video.id}`,
+      }));
+
+      return noStoreJson({
+        videos,
+        categories: categories.map((item) => ({
+          id: item.id,
+          name: item.snippet.title,
+        })),
+        nextPageToken: trendingData.nextPageToken ?? null,
+      });
+    }
+
+    const requestedOrder = searchParams.get("order");
+    const order = requestedOrder === "date" ? "date" : "relevance";
+
+    if (requestedOrder && !["date", "relevance"].includes(requestedOrder)) {
+      return noStoreJson({ error: "Invalid YouTube search order." }, 400);
+    }
+
+    if (!query) {
+      return noStoreJson({ error: "A search query is required." }, 400);
     }
 
     const searchUrl = new URL(`${YOUTUBE_API_URL}/search`);
@@ -74,8 +218,8 @@ export async function GET(request: Request) {
     const youtubeParams = new URLSearchParams({
       part: "snippet",
       type: "video",
-      maxResults: "30",
-      order: "relevance",
+      maxResults: String(maxResults),
+      order,
       q: query,
       regionCode: "NG",
       key: apiKey,
@@ -102,7 +246,7 @@ export async function GET(request: Request) {
     }).toString();
 
     const [searchResponse, categoriesResponse] = await Promise.all([
-      fetch(searchUrl),
+      fetch(searchUrl, { cache: "no-store" }),
       fetch(categoriesUrl, {
         next: { revalidate: 3600 },
       }),
@@ -112,9 +256,9 @@ export async function GET(request: Request) {
       const error = await searchResponse.json();
       console.error("YouTube search error:", error);
 
-      return NextResponse.json(
+      return noStoreJson(
         { error: "Could not retrieve YouTube videos." },
-        { status: searchResponse.status }
+        searchResponse.status
       );
     }
 
@@ -149,7 +293,7 @@ export async function GET(request: Request) {
       .filter((id): id is string => Boolean(id));
 
     if (videoIds.length === 0) {
-      return NextResponse.json({
+      return noStoreJson({
         videos: [],
         categories: (categories ?? []).map((item) => ({
           id: item.id,
@@ -167,15 +311,15 @@ export async function GET(request: Request) {
       key: apiKey,
     }).toString();
 
-    const detailsResponse = await fetch(detailsUrl);
+    const detailsResponse = await fetch(detailsUrl, { cache: "no-store" });
 
     if (!detailsResponse.ok) {
       const error = await detailsResponse.json();
       console.error("YouTube video details error:", error);
 
-      return NextResponse.json(
+      return noStoreJson(
         { error: "Could not retrieve video details." },
-        { status: detailsResponse.status }
+        detailsResponse.status
       );
     }
 
@@ -200,7 +344,7 @@ export async function GET(request: Request) {
       videoUrl: `https://www.youtube.com/watch?v=${video.id}`,
     }));
 
-    return NextResponse.json({
+    return noStoreJson({
       videos,
       categories: (categories ?? []).map((item) => ({
         id: item.id,
@@ -211,9 +355,15 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("YouTube API route error:", error);
 
-    return NextResponse.json(
-      { error: "Something went wrong while fetching videos." },
-      { status: 500 }
+    return noStoreJson(
+      {
+        error:
+          requestMode === "trending"
+            ? "Could not connect to YouTube Trending. Please check your connection and retry."
+            : "Something went wrong while fetching videos.",
+        ...(requestMode === "trending" ? { errorCode: "network_error" } : {}),
+      },
+      500
     );
   }
 }

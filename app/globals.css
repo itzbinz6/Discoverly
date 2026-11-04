@@ -13,7 +13,7 @@
 .account-menu button:hover,.mobile-menu button:hover{background:#d7e0d3}
 .mobile-menu-toggle,.mobile-menu{display:none}
 .section-head{gap:12px}.result-count{font-size:10px;color:var(--muted);white-space:nowrap}
-#interests,#trending,#watch-later,#continue-watching{scroll-margin-top:84px}
+#interests,#trending,#discover-feed,#watch-later,#continue-watching{scroll-margin-top:84px}
 .saved-grid{margin-top:12px}
 .saved-empty{display:flex;align-items:center;gap:14px;padding:20px;border-radius:12px;background:var(--panel);box-shadow:var(--shadow)}
 .saved-empty-icon{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:var(--panel);box-shadow:var(--inset);font-size:22px;flex:none}
@@ -216,6 +216,26 @@ button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{ou
 
   .mobile-account-actions button:hover {
     background: rgba(255, 255, 255, 0.16);
+  }
+}
+
+.section-head.results-head {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.feed-filter-panel {
+  margin-top: 12px;
+}
+
+.feed-filter-panel select:focus-visible {
+  outline: 2px solid #679b4f;
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .section-head.results-head {
+    gap: 12px;
   }
 }
 

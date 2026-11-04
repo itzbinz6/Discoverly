@@ -20,16 +20,158 @@ type Video = {
   progress?: number;
   remaining?: string;
 };
-const videos: Video[] = [
-  { id: 'web-build', category: 'TECHNOLOGY', title: 'A Better Way to Build on the Web', creator: 'Mina Rowe', views: '510K views', age: '2 days ago', duration: '18:42', score: 92, tone: 'tech' },
-  { id: 'brand-system', category: 'DESIGN', title: 'Color Stories: Building a Brand System', creator: 'Studio Forma', views: '324K views', age: '3 weeks ago', duration: '12:06', score: 88, tone: 'design' },
-  { id: 'small-team', category: 'BUSINESS', title: 'The Small Team Advantage', creator: 'Work in Progress', views: '689K views', age: '8 months ago', duration: '24:18', score: 85, tone: 'business' },
-  { id: 'matter', category: 'SCIENCE', title: 'The Hidden Patterns of Everyday Matter', creator: 'Field Notes', views: '278K views', age: '5 days ago', duration: '09:14', score: 90, tone: 'science' },
-  { id: 'two-oceans', category: 'TRAVEL', title: 'One Road, Two Oceans', creator: 'Open Atlas', views: '755K views', age: '2 weeks ago', duration: '16:35', score: 94, tone: 'travel' },
-  { id: 'great-chorus', category: 'MUSIC', title: 'The Anatomy of a Great Chorus', creator: 'Sound Room', views: '402K views', age: '1 year ago', duration: '21:02', score: 83, tone: 'music' },
+const discoveryQueries = [
+  'science explained',
+  'technology documentary',
+  'wildlife documentary',
+  'history documentary',
+  'business explained',
+  'creative process',
+  'artificial intelligence explained',
+  'interesting engineering projects',
 ];
-const featuredVideo: Video = { id: 'mountains', category: 'TRAVEL', title: 'Above the Quiet: Mountains at First Light', creator: 'Northbound Films', views: '842K views', age: '4 days ago', duration: '14:28', score: 96, tone: 'travel' };
-const continueVideo: Video = { id: 'public-spaces', category: 'DESIGN', title: 'A New Language for Public Spaces', creator: 'City Form', views: '—', age: 'Continue watching', duration: '18:30', score: 87, tone: 'design' };
+const discoveryRotationStorageKey = 'discoverly:discovery-query-index';
+const recentVideoHistoryStorageKey = 'discoverly:recent-videos';
+const recentVideoHistoryLimit = 100;
+const recentVideoHistoryMaxAge = 14 * 24 * 60 * 60 * 1000;
+const discoveryPageSize = 9;
+const trendingPageSize = 9;
+
+type RecentVideoEntry = { id: string; seenAt: number };
+
+const preferenceYouTubeCategoryIds: Record<string, string> = {
+  technology: '28',
+  'artificial intelligence': '28',
+  science: '28',
+  education: '27',
+  gaming: '20',
+  music: '10',
+  sports: '17',
+  'movies & tv': '24',
+  'news & politics': '25',
+  travel: '19',
+  'food & cooking': '26',
+  comedy: '23',
+  'health & fitness': '26',
+  'art & design': '26',
+  'history & culture': '27',
+  'personal development': '27',
+};
+
+function getNextDiscoveryQuery(preferredTopics: string[]) {
+  const queryOptions = preferredTopics.length > 0 ? preferredTopics : discoveryQueries;
+  let index = 0;
+
+  try {
+    const storedIndex = window.localStorage.getItem(discoveryRotationStorageKey);
+    if (storedIndex !== null) {
+      const parsedIndex = Number(storedIndex);
+      if (
+        Number.isInteger(parsedIndex) &&
+        parsedIndex >= 0 &&
+        parsedIndex < queryOptions.length
+      ) {
+        index = parsedIndex;
+      }
+    }
+  } catch (error) {
+    console.warn('Could not read the discovery query rotation:', error);
+  }
+
+  try {
+    window.localStorage.setItem(
+      discoveryRotationStorageKey,
+      String((index + 1) % queryOptions.length)
+    );
+  } catch (error) {
+    console.warn('Could not save the discovery query rotation:', error);
+  }
+
+  return queryOptions[index];
+}
+
+function getPreferredTrendingCategory(preferredTopics: string[]) {
+  for (const topic of preferredTopics) {
+    const categoryId = preferenceYouTubeCategoryIds[topic.trim().toLowerCase()];
+    if (categoryId) return categoryId;
+  }
+
+  return 'All categories';
+}
+
+function readRecentVideoHistory(userId: string): RecentVideoEntry[] {
+  try {
+    const storedHistory = window.localStorage.getItem(
+      `${recentVideoHistoryStorageKey}:${userId}`
+    );
+    if (!storedHistory) return [];
+
+    const parsedHistory: unknown = JSON.parse(storedHistory);
+    if (!Array.isArray(parsedHistory)) {
+      throw new Error('Stored recent-video history is not an array.');
+    }
+
+    const cutoff = Date.now() - recentVideoHistoryMaxAge;
+    return parsedHistory
+      .filter(
+        (entry): entry is RecentVideoEntry =>
+          typeof entry?.id === 'string' &&
+          typeof entry?.seenAt === 'number' &&
+          Number.isFinite(entry.seenAt) &&
+          entry.seenAt >= cutoff
+      )
+      .sort((a, b) => b.seenAt - a.seenAt)
+      .slice(0, recentVideoHistoryLimit);
+  } catch (error) {
+    console.warn('Could not read recent-video history:', error);
+    return [];
+  }
+}
+
+function filterPreviouslyDisplayedVideos(
+  items: Video[],
+  userId: string | null,
+  existingIds = new Set<string>()
+) {
+  const recentIds = new Set(
+    userId ? readRecentVideoHistory(userId).map((entry) => entry.id) : []
+  );
+  const uniqueIds = new Set(existingIds);
+
+  return items.filter((video) => {
+    if (recentIds.has(video.id) || uniqueIds.has(video.id)) return false;
+    uniqueIds.add(video.id);
+    return true;
+  });
+}
+
+function recordDisplayedVideos(userId: string, displayedVideos: Video[]) {
+  if (displayedVideos.length === 0) return;
+
+  try {
+    const history = new Map(
+      readRecentVideoHistory(userId).map((entry) => [entry.id, entry.seenAt])
+    );
+    const seenAt = Date.now();
+
+    for (const video of displayedVideos) {
+      history.set(video.id, seenAt);
+    }
+
+    window.localStorage.setItem(
+      `${recentVideoHistoryStorageKey}:${userId}`,
+      JSON.stringify(
+        [...history]
+          .map(([id, timestamp]) => ({ id, seenAt: timestamp }))
+          .sort((a, b) => b.seenAt - a.seenAt)
+          .slice(0, recentVideoHistoryLimit)
+      )
+    );
+  } catch (error) {
+    console.warn('Could not save recent-video history:', error);
+  }
+}
+
 const popularSearches = [
   'Artificial Intelligence',
   'Web Development',
@@ -98,6 +240,12 @@ type YouTubeCategory = {
   name: string;
 };
 
+type TrendingResponse = {
+  videos: YouTubeVideo[];
+  categories: YouTubeCategory[];
+  nextPageToken: string | null;
+};
+
 const convertYouTubeVideos = (items: YouTubeVideo[]): Video[] => {
   return items.map((item) => ({
     id: item.id,
@@ -128,6 +276,138 @@ const durationSeconds = (value: string) => {
   return minutes * 60 + seconds;
 };
 const ageDays = (age: string) => { const n = Number(age.match(/\d+/)?.[0] ?? 0); if (age.includes('year')) return n * 365; if (age.includes('month')) return n * 30; if (age.includes('week')) return n * 7; return n; };
+
+type VideoFilters = {
+  category: string;
+  duration: string;
+  date: string;
+  sort: string;
+  preferredTopics: string[];
+  excludedTopics: string[];
+  preservePopularityOrder?: boolean;
+};
+
+function filterAndSortVideos(videos: Video[], filters: VideoFilters) {
+  const { category, duration, date, sort, preferredTopics, excludedTopics } = filters;
+  const list = videos.filter((video) => {
+    const categoryMatch =
+      category === 'All categories' || video.categoryId === category;
+    const seconds = durationSeconds(video.duration);
+    const durationMatch =
+      duration === 'Any length' ||
+      (duration === 'Under 10 min' && seconds < 600) ||
+      (duration === '10–20 min' && seconds >= 600 && seconds <= 1200) ||
+      (duration === 'Over 20 min' && seconds > 1200);
+    const publishedAt = video.publishedAt ? Date.parse(video.publishedAt) : NaN;
+    const days = Number.isFinite(publishedAt)
+      ? Math.max(0, Math.floor((Date.now() - publishedAt) / 86400000))
+      : ageDays(video.age);
+    const dateMatch =
+      date === 'Any time' ||
+      (date === 'Today' && days === 0) ||
+      (date === 'This week' && days <= 7) ||
+      (date === 'This month' && days <= 30) ||
+      (date === 'This year' && days <= 365);
+
+    return categoryMatch && durationMatch && dateMatch;
+  });
+
+  if (sort === 'Newest') {
+    list.sort((a, b) => {
+      const aDate = a.publishedAt ? Date.parse(a.publishedAt) : 0;
+      const bDate = b.publishedAt ? Date.parse(b.publishedAt) : 0;
+      return bDate - aDate;
+    });
+  } else if (sort === 'Most popular' && !filters.preservePopularityOrder) {
+    const parseViews = (value: string) => {
+      const match = value.match(/([\d,.]+)\s*([KMB])?/i);
+      if (!match) return 0;
+      const multipliers: Record<string, number> = {
+        K: 1e3,
+        M: 1e6,
+        B: 1e9,
+      };
+      const multiplier = multipliers[(match[2] ?? '').toUpperCase()] ?? 1;
+      return Number(match[1].replace(/,/g, '')) * multiplier;
+    };
+    list.sort((a, b) => parseViews(b.views) - parseViews(a.views));
+  } else if (sort === 'Best match') {
+    const score = (video: Video) => {
+      const topic = video.category.trim().toLowerCase();
+      if (excludedTopics.some((item) => item.trim().toLowerCase() === topic)) {
+        return video.score - 15;
+      }
+      if (preferredTopics.some((item) => item.trim().toLowerCase() === topic)) {
+        return video.score + 15;
+      }
+      return video.score;
+    };
+    list.sort((a, b) => score(b) - score(a));
+  }
+
+  return list;
+}
+
+const durationOptions = ['Any length', 'Under 10 min', '10–20 min', 'Over 20 min'];
+const dateOptions = ['Any time', 'Today', 'This week', 'This month', 'This year'];
+const sortOptions = ['Most popular', 'Best match', 'Newest'];
+
+function FeedFilterControls({
+  id,
+  categories,
+  category,
+  duration,
+  date,
+  sort,
+  onCategoryChange,
+  onDurationChange,
+  onDateChange,
+  onSortChange,
+}: {
+  id: string;
+  categories: YouTubeCategory[];
+  category: string;
+  duration: string;
+  date: string;
+  sort: string;
+  onCategoryChange: (value: string) => void;
+  onDurationChange: (value: string) => void;
+  onDateChange: (value: string) => void;
+  onSortChange: (value: string) => void;
+}) {
+  return (
+    <div className="filter-panel feed-filter-panel" id={id}>
+      <label>
+        CATEGORY
+        <select value={category} onChange={(event) => onCategoryChange(event.target.value)}>
+          <option value="All categories">All categories</option>
+          {categories.map((item) => (
+            <option key={item.id} value={item.id}>{item.name}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        DURATION
+        <select value={duration} onChange={(event) => onDurationChange(event.target.value)}>
+          {durationOptions.map((option) => <option key={option}>{option}</option>)}
+        </select>
+      </label>
+      <label>
+        UPLOAD DATE
+        <select value={date} onChange={(event) => onDateChange(event.target.value)}>
+          {dateOptions.map((option) => <option key={option}>{option}</option>)}
+        </select>
+      </label>
+      <label>
+        SORT BY
+        <select value={sort} onChange={(event) => onSortChange(event.target.value)}>
+          {sortOptions.map((option) => <option key={option}>{option}</option>)}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 function Score({ value }: { value: number }) { return <div className="score-ring" aria-label={`Example match score ${value}`}><span>{value}</span></div>; }
 function VideoCard({ video, saved, onToggleSave, onPreview }: { video: Video; saved: boolean; onToggleSave: (id: string) => void; onPreview: (video: Video) => void }) {
   return <article className="video-card"><div
@@ -150,6 +430,7 @@ export default function Home() {
   const [excludedTopics, setExcludedTopics] = useState<string[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [preferencesReady, setPreferencesReady] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [savedVideosLoading, setSavedVideosLoading] = useState(false);
   const activeUserIdRef = useRef<string | null>(null);
@@ -163,21 +444,57 @@ export default function Home() {
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [savedVideos, setSavedVideos] = useState<Video[]>([]);
   const [liveVideos, setLiveVideos] = useState<Video[]>([]);
+  const [trendingVideos, setTrendingVideos] = useState<Video[]>([]);
+  const [trendingCategory, setTrendingCategory] = useState('All categories');
+  const [trendingDuration, setTrendingDuration] = useState('Any length');
+  const [trendingDate, setTrendingDate] = useState('Any time');
+  const [trendingSort, setTrendingSort] = useState('Most popular');
+  const [trendingCategories, setTrendingCategories] = useState<YouTubeCategory[]>([]);
+  const [trendingLoading, setTrendingLoading] = useState(false);
+  const [trendingLoadingMore, setTrendingLoadingMore] = useState(false);
+  const [trendingError, setTrendingError] = useState('');
+  const [trendingNextPageToken, setTrendingNextPageToken] = useState<string | null>(null);
+  const [activeDiscoveryQuery, setActiveDiscoveryQuery] = useState('');
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const videoRequestGenerationRef = useRef(0);
   const loadingMoreLockRef = useRef(false);
+  const initialDiscoveryStartedRef = useRef(false);
+  const activeDiscoveryQueryRef = useRef('');
+  const trendingRequestGenerationRef = useRef(0);
+  const trendingLoadingMoreLockRef = useRef(false);
+  const trendingInitialLoadStartedRef = useRef(false);
+  const trendingCategoryRef = useRef('All categories');
   const [searchTerm, setSearchTerm] = useState('');
   const [youtubeCategories, setYoutubeCategories] = useState<YouTubeCategory[]>([]);
   const [youtubeLoading, setYoutubeLoading] = useState(false);
   const [youtubeError, setYoutubeError] = useState('');
-  const currentFeaturedVideo = liveVideos[0] ?? featuredVideo;
-  const nextVideoToExplore = liveVideos[1] ?? liveVideos[0] ?? null;
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const searchFormRef = useRef<HTMLFormElement>(null);
+
+  const storeActiveDiscoveryQuery = (discoveryQuery: string) => {
+    activeDiscoveryQueryRef.current = discoveryQuery;
+    setActiveDiscoveryQuery(discoveryQuery);
+  };
+
+  const getActiveDiscoveryQuery = () => {
+    if (activeDiscoveryQueryRef.current) {
+      return activeDiscoveryQueryRef.current;
+    }
+
+    const discoveryQuery = getNextDiscoveryQuery(preferredTopics);
+    storeActiveDiscoveryQuery(discoveryQuery);
+    return discoveryQuery;
+  };
+
+  const rotateActiveDiscoveryQuery = () => {
+    const discoveryQuery = getNextDiscoveryQuery(preferredTopics);
+    storeActiveDiscoveryQuery(discoveryQuery);
+    return discoveryQuery;
+  };
 
   const searchSuggestions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -232,14 +549,39 @@ export default function Home() {
       setAuthReady(true);
 
       if (accountChanged) {
+        videoRequestGenerationRef.current += 1;
+        loadingMoreLockRef.current = false;
+        trendingRequestGenerationRef.current += 1;
+        trendingLoadingMoreLockRef.current = false;
+        initialDiscoveryStartedRef.current = false;
+        trendingInitialLoadStartedRef.current = false;
+        activeDiscoveryQueryRef.current = '';
+        trendingCategoryRef.current = 'All categories';
+        setActiveDiscoveryQuery('');
+        setTrendingCategory('All categories');
+        setTrendingDuration('Any length');
+        setTrendingDate('Any time');
+        setTrendingSort('Most popular');
+        setPreferencesReady(false);
         setSavedIds([]);
         setSavedVideos([]);
         setSaveMessage('');
+        setLiveVideos([]);
+        setTrendingVideos([]);
+        setNextPageToken(null);
+        setTrendingNextPageToken(null);
+        setYoutubeLoading(false);
+        setTrendingLoading(false);
+        setLoadingMore(false);
+        setTrendingLoadingMore(false);
+        setYoutubeError('');
+        setTrendingError('');
         setPreferredTopics([]);
         setExcludedTopics([]);
       }
 
       if (!sessionUserId) {
+        setPreferencesReady(true);
         setSavedVideosLoading(false);
         return;
       }
@@ -283,6 +625,7 @@ export default function Home() {
             preferencesResult.data?.excluded_topics ?? []
           );
         }
+        setPreferencesReady(true);
 
         if (savedVideosResult.error) {
           console.error(
@@ -331,6 +674,7 @@ export default function Home() {
         }
 
         console.error('Could not load saved videos:', error);
+        setPreferencesReady(true);
         setSaveMessage('Could not load your saved videos. Please refresh and try again.');
         setSavedVideosLoading(false);
       }
@@ -339,7 +683,10 @@ export default function Home() {
     supabase.auth.getSession().then(({ data, error }) => {
       if (error) {
         console.error('Could not read session:', error.message);
-        if (mounted) setAuthReady(true);
+        if (mounted) {
+          setAuthReady(true);
+          setPreferencesReady(true);
+        }
         return;
       }
       const user = data.session?.user;
@@ -360,9 +707,15 @@ export default function Home() {
   const fetchVideos = async (
     term: string,
     selectedCategory: string,
-    pageToken?: string
+    pageToken?: string,
+    order: 'relevance' | 'date' = 'relevance',
+    maxResults = 30
   ) => {
-    const params = new URLSearchParams({ q: term.trim() || 'videos' });
+    const params = new URLSearchParams({
+      q: term.trim(),
+      order,
+      maxResults: String(maxResults),
+    });
 
     if (selectedCategory !== 'All categories') {
       params.set('categoryId', selectedCategory);
@@ -370,7 +723,9 @@ export default function Home() {
 
     if (pageToken) params.set('pageToken', pageToken);
 
-    const response = await fetch(`/api/youtube?${params.toString()}`);
+    const response = await fetch(`/api/youtube?${params.toString()}`, {
+      cache: 'no-store',
+    });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);
@@ -378,6 +733,170 @@ export default function Home() {
     }
 
     return response.json();
+  };
+
+  const fetchTrendingVideos = async (
+    selectedCategory: string,
+    pageToken?: string
+  ): Promise<TrendingResponse> => {
+    const params = new URLSearchParams({
+      mode: 'trending',
+      maxResults: String(trendingPageSize),
+    });
+
+    if (selectedCategory !== 'All categories') {
+      params.set('categoryId', selectedCategory);
+    }
+
+    if (pageToken) params.set('pageToken', pageToken);
+
+    const response = await fetch(`/api/youtube?${params.toString()}`, {
+      cache: 'no-store',
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        typeof data?.error === 'string'
+          ? data.error
+          : 'Could not load YouTube Trending videos.'
+      );
+    }
+
+    return {
+      videos: data.videos ?? [],
+      categories: data.categories ?? [],
+      nextPageToken: data.nextPageToken ?? null,
+    };
+  };
+
+  const requestTrendingVideos = async (
+    selectedCategory: string,
+    pageToken?: string,
+    replaceResults = false
+  ) => {
+    const isLoadingMore = Boolean(pageToken) && !replaceResults;
+    if (isLoadingMore && trendingLoadingMoreLockRef.current) return;
+
+    if (isLoadingMore) {
+      trendingLoadingMoreLockRef.current = true;
+      setTrendingLoadingMore(true);
+    } else {
+      trendingRequestGenerationRef.current += 1;
+      trendingLoadingMoreLockRef.current = false;
+      setTrendingLoadingMore(false);
+      setTrendingLoading(true);
+      setTrendingVideos([]);
+      setTrendingNextPageToken(null);
+    }
+
+    const requestGeneration = trendingRequestGenerationRef.current;
+    setTrendingError('');
+
+    try {
+      const data = await fetchTrendingVideos(selectedCategory, pageToken);
+
+      if (requestGeneration !== trendingRequestGenerationRef.current) return;
+
+      const videos = convertYouTubeVideos(data.videos);
+      if (isLoadingMore) {
+        setTrendingVideos((current) => {
+          const existingIds = new Set(current.map((video) => video.id));
+          const newVideos = videos.filter((video) => {
+            if (existingIds.has(video.id)) return false;
+            existingIds.add(video.id);
+            return true;
+          });
+          return [...current, ...newVideos];
+        });
+      } else {
+        setTrendingVideos(videos);
+      }
+
+      setTrendingCategories(data.categories);
+      setTrendingNextPageToken(data.nextPageToken);
+    } catch (error) {
+      if (requestGeneration === trendingRequestGenerationRef.current) {
+        console.error('YouTube Trending error:', error);
+        setTrendingError(
+          error instanceof Error
+            ? error.message
+            : 'Could not load YouTube Trending videos.'
+        );
+      }
+    } finally {
+      if (requestGeneration === trendingRequestGenerationRef.current) {
+        if (isLoadingMore) {
+          trendingLoadingMoreLockRef.current = false;
+          setTrendingLoadingMore(false);
+        } else {
+          setTrendingLoading(false);
+        }
+      }
+    }
+  };
+
+  const refreshTrending = () => {
+    if (trendingNextPageToken) {
+      void requestTrendingVideos(
+        trendingCategoryRef.current,
+        trendingNextPageToken,
+        true
+      );
+      return;
+    }
+
+    void requestTrendingVideos(trendingCategoryRef.current);
+  };
+
+  const loadMoreTrendingVideos = () => {
+    if (!trendingNextPageToken || trendingLoadingMoreLockRef.current) return;
+    void requestTrendingVideos(
+      trendingCategoryRef.current,
+      trendingNextPageToken
+    );
+  };
+
+  const changeDiscoveryCategory = async (selectedCategory: string) => {
+    const requestQuery = searchTerm || getActiveDiscoveryQuery();
+    const requestGeneration = invalidateVideoRequests();
+    initialDiscoveryStartedRef.current = true;
+    setCategory(selectedCategory);
+    setYoutubeLoading(true);
+    setYoutubeError('');
+    setNextPageToken(null);
+    setLiveVideos([]);
+
+    try {
+      const data = await fetchVideos(
+        requestQuery,
+        selectedCategory,
+        undefined,
+        'relevance',
+        searchTerm ? 30 : discoveryPageSize
+      );
+
+      if (requestGeneration !== videoRequestGenerationRef.current) return;
+
+      setLiveVideos(
+        filterPreviouslyDisplayedVideos(
+          convertYouTubeVideos(data.videos ?? []),
+          searchTerm ? null : activeUserIdRef.current
+        )
+      );
+      setYoutubeCategories(data.categories ?? []);
+      setNextPageToken(data.nextPageToken ?? null);
+    } catch (error) {
+      if (requestGeneration === videoRequestGenerationRef.current) {
+        setYoutubeError(
+          error instanceof Error ? error.message : 'Could not load this category.'
+        );
+      }
+    } finally {
+      if (requestGeneration === videoRequestGenerationRef.current) {
+        setYoutubeLoading(false);
+      }
+    }
   };
 
   const invalidateVideoRequests = () => {
@@ -389,8 +908,11 @@ export default function Home() {
 
   const performSearch = async (
     term: string,
-    selectedCategory = category
+    selectedCategory: string,
+    discoveryQuery: string,
+    pageToken?: string
   ) => {
+    initialDiscoveryStartedRef.current = true;
     const requestGeneration = invalidateVideoRequests();
     setYoutubeLoading(true);
     setYoutubeError('');
@@ -400,16 +922,26 @@ export default function Home() {
 
     const normalizedTerm = term.trim();
     setSearchTerm(normalizedTerm);
+    const requestQuery = normalizedTerm || discoveryQuery;
+    const order = 'relevance';
 
     try {
       const data = await fetchVideos(
-        normalizedTerm || 'videos',
-        selectedCategory
+        requestQuery,
+        selectedCategory,
+        pageToken,
+        order,
+        normalizedTerm ? 30 : discoveryPageSize
       );
 
       if (requestGeneration !== videoRequestGenerationRef.current) return;
 
-      setLiveVideos(convertYouTubeVideos(data.videos ?? []));
+      setLiveVideos(
+        filterPreviouslyDisplayedVideos(
+          convertYouTubeVideos(data.videos ?? []),
+          normalizedTerm ? null : activeUserIdRef.current
+        )
+      );
       setYoutubeCategories(data.categories ?? []);
       setNextPageToken(data.nextPageToken ?? null);
     } catch (error) {
@@ -436,11 +968,22 @@ export default function Home() {
     setYoutubeError('');
 
     try {
-      const data = await fetchVideos(searchTerm, category, requestPageToken);
+      const order = 'relevance';
+      const data = await fetchVideos(
+        searchTerm || activeDiscoveryQueryRef.current,
+        category,
+        requestPageToken,
+        order,
+        searchTerm ? 30 : discoveryPageSize
+      );
 
       if (requestGeneration !== videoRequestGenerationRef.current) return;
 
-      const newVideos = convertYouTubeVideos(data.videos ?? []);
+      const newVideos = filterPreviouslyDisplayedVideos(
+        convertYouTubeVideos(data.videos ?? []),
+        searchTerm ? null : activeUserIdRef.current,
+        new Set(liveVideos.map((video) => video.id))
+      );
 
       setLiveVideos((current) => {
         const existingIds = new Set(current.map((video) => video.id));
@@ -470,10 +1013,26 @@ export default function Home() {
   };
 
   useEffect(() => {
-    void performSearch('', 'All categories');
-    // Initial feed load only.
+    if (!authReady || !preferencesReady || initialDiscoveryStartedRef.current) return;
+
+    initialDiscoveryStartedRef.current = true;
+    const discoveryQuery = getNextDiscoveryQuery(preferredTopics);
+    storeActiveDiscoveryQuery(discoveryQuery);
+    void performSearch('', 'All categories', discoveryQuery);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authReady, preferencesReady, userId]);
+
+  useEffect(() => {
+    if (!authReady || !preferencesReady || trendingInitialLoadStartedRef.current) return;
+
+    trendingInitialLoadStartedRef.current = true;
+    const preferredCategory = getPreferredTrendingCategory(preferredTopics);
+    trendingCategoryRef.current = preferredCategory;
+    setTrendingCategory(preferredCategory);
+    void requestTrendingVideos(preferredCategory);
+    // Initial Trending load only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authReady, preferencesReady, userId]);
 
   const handleLogout = async () => {
     const { error } = await supabase.auth.signOut();
@@ -482,81 +1041,45 @@ export default function Home() {
     setMobileMenuOpen(false);
   };
 
-  const filtered = useMemo(() => {
-    let list = [...(youtubeError && liveVideos.length === 0 ? videos : liveVideos)];
+  const filtered = useMemo(
+    () => filterAndSortVideos(liveVideos, {
+      category,
+      duration,
+      date,
+      sort,
+      preferredTopics,
+      excludedTopics,
+    }),
+    [category, date, duration, excludedTopics, liveVideos, preferredTopics, sort]
+  );
+  const filteredTrending = useMemo(
+    () => filterAndSortVideos(trendingVideos, {
+      category: trendingCategory,
+      duration: trendingDuration,
+      date: trendingDate,
+      sort: trendingSort,
+      preferredTopics,
+      excludedTopics,
+      preservePopularityOrder: true,
+    }),
+    [
+      excludedTopics,
+      preferredTopics,
+      trendingCategory,
+      trendingDate,
+      trendingDuration,
+      trendingSort,
+      trendingVideos,
+    ]
+  );
 
-    list = list.filter((video) => {
-      const categoryMatch =
-        category === 'All categories' || video.categoryId === category;
-      const seconds = durationSeconds(video.duration);
-      const durationMatch =
-        duration === 'Any length' ||
-        (duration === 'Under 10 min' && seconds < 600) ||
-        (duration === '10–20 min' && seconds >= 600 && seconds <= 1200) ||
-        (duration === 'Over 20 min' && seconds > 1200);
-      const days = ageDays(video.age);
-      const dateMatch =
-        date === 'Any time' ||
-        (date === 'Today' && days === 0) ||
-        (date === 'This week' && days <= 7) ||
-        (date === 'This month' && days <= 30) ||
-        (date === 'This year' && days <= 365);
+  useEffect(() => {
+    if (!userId) return;
 
-      return categoryMatch && durationMatch && dateMatch;
-    });
+    recordDisplayedVideos(userId, filtered);
+  }, [filtered, userId]);
 
-    if (sort === 'Best match') {
-      list.sort((a, b) => {
-        const getPersonalizedScore = (video: Video) => {
-          const topic = video.category.trim().toLowerCase();
-
-          const isExcluded = excludedTopics.some(
-            (item) => item.trim().toLowerCase() === topic
-          );
-
-          const isPreferred = preferredTopics.some(
-            (item) => item.trim().toLowerCase() === topic
-          );
-
-          if (isExcluded) return video.score - 15;
-          if (isPreferred) return video.score + 15;
-
-          return video.score;
-        };
-
-        return getPersonalizedScore(b) - getPersonalizedScore(a);
-      });
-    }
-    if (sort === 'Newest') {
-      list.sort((a, b) => ageDays(a.age) - ageDays(b.age));
-    }
-    if (sort === 'Most popular') {
-      list.sort(
-        (a, b) =>
-          Number(b.views.replace(/[^\d.]/g, '')) -
-          Number(a.views.replace(/[^\d.]/g, ''))
-      );
-    }
-
-    return list;
-  }, [
-    category,
-    date,
-    duration,
-    sort,
-    preferredTopics,
-    excludedTopics,
-    liveVideos,
-    youtubeError,
-  ]);
-
-  const allVideos = [
-    ...liveVideos,
-    ...videos,
-    currentFeaturedVideo,
-    featuredVideo,
-    continueVideo,
-  ].filter(
+  const allVideos = [...liveVideos, ...trendingVideos].filter(
     (video, index, list) =>
       list.findIndex((item) => item.id === video.id) === index
   );
@@ -655,7 +1178,34 @@ export default function Home() {
     setDate('Any time');
     setSort('Best match');
     setQuery('');
-    void performSearch('');
+    void performSearch('', 'All categories', getActiveDiscoveryQuery());
+  };
+  const clearTrendingFilters = () => {
+    trendingCategoryRef.current = 'All categories';
+    setTrendingCategory('All categories');
+    setTrendingDuration('Any length');
+    setTrendingDate('Any time');
+    setTrendingSort('Most popular');
+    void requestTrendingVideos('All categories');
+  };
+  const refreshFeed = () => {
+    if (nextPageToken) {
+      void performSearch(
+        searchTerm,
+        category,
+        activeDiscoveryQueryRef.current,
+        nextPageToken
+      );
+      return;
+    }
+
+    if (searchTerm) {
+      void performSearch(searchTerm, category, activeDiscoveryQuery);
+      return;
+    }
+
+    const discoveryQuery = rotateActiveDiscoveryQuery();
+    void performSearch('', category, discoveryQuery);
   };
   const scrollTo = (id: string) => { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); setMobileMenuOpen(false); setAccountOpen(false); };
 
@@ -668,8 +1218,12 @@ export default function Home() {
         role="search"
         onSubmit={(e) => {
           e.preventDefault();
-          void performSearch(query);
-          scrollTo('trending');
+          void performSearch(
+            query,
+            category,
+            query.trim() ? activeDiscoveryQuery : getActiveDiscoveryQuery()
+          );
+          scrollTo('discover-feed');
         }}
       >
         <span aria-hidden="true">⌕</span>
@@ -711,8 +1265,8 @@ export default function Home() {
                 aria-selected="false"
                 onClick={() => {
                   setQuery(suggestion);
-                  void performSearch(suggestion);
-                  scrollTo('trending');
+                  void performSearch(suggestion, category, activeDiscoveryQuery);
+                  scrollTo('discover-feed');
                 }}
               >
                 <span aria-hidden="true">⌕</span>
@@ -722,7 +1276,7 @@ export default function Home() {
           </div>
         )}
       </form>
-      <div className="nav-links"><a href="#top">Home</a><a href="#trending">Trending</a><a href="#interests">Categories</a><a href="#watch-later">Watch Later{savedIds.length > 0 ? ` (${savedIds.length})` : ''}</a>{!userEmail && <><a className="nav-auth-link" href="/auth">Log in</a><a className="nav-auth-button" href="/auth?mode=signup">Sign up</a></>}{userEmail && <div className="account-wrap"><button className="avatar" aria-label="Open account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen(v => !v)}>{userEmail.slice(0, 1).toUpperCase()}</button>{accountOpen && <div className="account-menu"><strong>Your account</strong><span>{userEmail}</span><button onClick={() => {
+      <div className="nav-links"><a href="#top">Home</a><a href="#trending">Trending</a><a href="#discover-feed">Discover</a><a href="#interests">Categories</a><a href="#watch-later">Watch Later{savedIds.length > 0 ? ` (${savedIds.length})` : ''}</a>{!userEmail && <><a className="nav-auth-link" href="/auth">Log in</a><a className="nav-auth-button" href="/auth?mode=signup">Sign up</a></>}{userEmail && <div className="account-wrap"><button className="avatar" aria-label="Open account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen(v => !v)}>{userEmail.slice(0, 1).toUpperCase()}</button>{accountOpen && <div className="account-menu"><strong>Your account</strong><span>{userEmail}</span><button onClick={() => {
   setAccountOpen(false);
   window.location.assign('/preferences');
 }}>
@@ -733,6 +1287,7 @@ export default function Home() {
   <div className="mobile-menu">
     <button onClick={() => scrollTo("top")}>Home</button>
     <button onClick={() => scrollTo("trending")}>Trending</button>
+    <button onClick={() => scrollTo("discover-feed")}>Discover</button>
     <button onClick={() => scrollTo("interests")}>Categories</button>
     <button onClick={() => scrollTo("watch-later")}>
       Watch Later ({savedIds.length})
@@ -783,121 +1338,177 @@ export default function Home() {
     </nav>
     <div className="page-wrap">
       <section className="hero"><div className="hero-copy"><div className="hero-kicker"><i/> CURATED FOR YOUR CURIOSITY</div><h1>Find your next favorite<br className="desktop-break"/> video</h1><p>Discover thoughtful stories, fresh ideas, and the videos worth making time for.</p><button className="compass" aria-label="Explore videos" title="Explore videos" onClick={() => scrollTo('trending')}>⊙</button></div><div className="hero-orb" aria-hidden="true"><div className="orb-core"/></div></section>
-      <section className="interests" id="interests"><div className="section-kicker"><i/> BROWSE BY INTEREST</div><div className="section-head"><h2>Explore videos by category</h2><button className="clear" onClick={clearFilters}>Clear filters</button></div><div className="filter-panel"><label>
-  CATEGORY
-  <select
-  value={category}
-  onChange={async (e) => {
-    const selectedCategory = e.target.value;
-    const requestGeneration = invalidateVideoRequests();
-
-    setCategory(selectedCategory);
-    setYoutubeLoading(true);
-    setYoutubeError('');
-    setNextPageToken(null);
-    setLiveVideos([]);
-
-    try {
-      const data = await fetchVideos(searchTerm, selectedCategory);
-
-      if (requestGeneration !== videoRequestGenerationRef.current) return;
-
-      setLiveVideos(convertYouTubeVideos(data.videos ?? []));
-      setYoutubeCategories(data.categories ?? []);
-      setNextPageToken(data.nextPageToken ?? null);
-    } catch (error) {
-      if (requestGeneration === videoRequestGenerationRef.current) {
-        setYoutubeError(
-          error instanceof Error ? error.message : 'Could not load this category.'
-        );
-      }
-    } finally {
-      if (requestGeneration === videoRequestGenerationRef.current) {
-        setYoutubeLoading(false);
-      }
-    }
-  }}
->
-    <option value="All categories">All categories</option>
-    {youtubeCategories.map(item => (
-      <option key={item.id} value={item.id}>
-        {item.name}
-      </option>
-    ))}
-  </select>
-</label><label>DURATION<select value={duration} onChange={e=>setDuration(e.target.value)}>{['Any length','Under 10 min','10–20 min','Over 20 min'].map(v=><option key={v}>{v}</option>)}</select></label><label>UPLOAD DATE<select value={date} onChange={e=>setDate(e.target.value)}>{['Any time','Today','This week','This month','This year'].map(v=><option key={v}>{v}</option>)}</select></label><label>SORT BY<select value={sort} onChange={e=>setSort(e.target.value)}>{['Most popular','Best match','Newest'].map(v=><option key={v}>{v}</option>)}</select></label></div></section>
-      {searchTerm === '' && <section className="featured">
-        <div className="section-kicker"><i/> EDITOR&apos;S PICK</div>
-        <h2>Featured this week</h2>
-
-        <article className="featured-card">
-          <div
-            className="featured-thumb"
-            style={
-              currentFeaturedVideo.thumbnail
-                ? {
-                    backgroundImage: `url("${currentFeaturedVideo.thumbnail}")`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                  }
-                : undefined
-            }
+      <section className="trending" id="trending">
+        <div className="section-kicker"><i /> POPULAR ON YOUTUBE IN NIGERIA</div>
+        <div className="section-head results-head">
+          <h2>Trending now</h2>
+          <span className="result-count">
+            {filteredTrending.length} {filteredTrending.length === 1 ? 'video' : 'videos'}
+          </span>
+          <button
+            className="clear"
+            onClick={refreshTrending}
+            disabled={trendingLoading}
           >
-            {currentFeaturedVideo.score > 0 && (
-              <Score value={currentFeaturedVideo.score} />
-            )}
-
-            <button
-              className="play-button"
-              aria-label="Open featured video"
-              onClick={() => setSelectedVideo(currentFeaturedVideo)}
-            >
-              ▶
+            Refresh Trending
+          </button>
+          <button className="clear" onClick={clearTrendingFilters}>
+            Clear filters
+          </button>
+        </div>
+        <FeedFilterControls
+          id="trending-filters"
+          categories={trendingCategories}
+          category={trendingCategory}
+          duration={trendingDuration}
+          date={trendingDate}
+          sort={trendingSort}
+          onCategoryChange={(selectedCategory) => {
+            trendingCategoryRef.current = selectedCategory;
+            setTrendingCategory(selectedCategory);
+            void requestTrendingVideos(selectedCategory);
+          }}
+          onDurationChange={setTrendingDuration}
+          onDateChange={setTrendingDate}
+          onSortChange={setTrendingSort}
+        />
+        <p className="preview-note">
+          Filters apply to loaded Trending videos. “Most popular” keeps YouTube’s chart order.
+        </p>
+        {trendingLoading && trendingVideos.length === 0 && (
+          <p role="status" className="preview-note">
+            Loading popular YouTube videos for Nigeria…
+          </p>
+        )}
+        {trendingError && (
+          <p role="alert" className="preview-note">
+            {trendingError}{' '}
+            <button className="clear" onClick={refreshTrending}>
+              Retry Trending
             </button>
-
-            <span className="duration">
-              {currentFeaturedVideo.duration}
-            </span>
+          </p>
+        )}
+        <div className="video-grid">
+          {filteredTrending.map((video) => (
+            <VideoCard
+              key={video.id}
+              video={video}
+              saved={savedIds.includes(video.id)}
+              onToggleSave={toggleSave}
+              onPreview={setSelectedVideo}
+            />
+          ))}
+        </div>
+        {trendingNextPageToken && (
+          <div className="load-more-wrap">
+            <button
+              className="secondary-button"
+              onClick={loadMoreTrendingVideos}
+              disabled={trendingLoadingMore}
+            >
+              {trendingLoadingMore ? 'Loading videos…' : 'Load more'}
+            </button>
           </div>
-
-          <div className="featured-info">
-            <div className="category-label">
-              {currentFeaturedVideo.category}
-            </div>
-
-            <h3>{currentFeaturedVideo.title}</h3>
-
+        )}
+        {filteredTrending.length === 0 && !trendingLoading && !trendingError && (
+          <div className="empty">
             <p>
-              Discover something interesting and worth your time.
+              {trendingVideos.length > 0
+                ? 'No loaded Trending videos match these filters. Load more or adjust the filters.'
+                : `YouTube returned no popular videos for Nigeria${trendingCategory !== 'All categories' ? ' in this category' : ''}.`}
             </p>
-
-            <div className="featured-by">
-              <div>
-                <b>{currentFeaturedVideo.creator}</b>
-                <small>
-                  {currentFeaturedVideo.views} · {currentFeaturedVideo.age}
-                </small>
-              </div>
-
-              <button
-                className={`save-button ${
-                  savedIds.includes(currentFeaturedVideo.id) ? 'saved' : ''
-                }`}
-                aria-label={
-                  savedIds.includes(currentFeaturedVideo.id)
-                    ? 'Remove featured video from Watch Later'
-                    : 'Save featured video to Watch Later'
-                }
-                title="Save to Watch Later"
-                onClick={() => toggleSave(currentFeaturedVideo.id)}
-              >
-                {savedIds.includes(currentFeaturedVideo.id) ? '✓' : '♧'}
-              </button>
-            </div>
+            {trendingVideos.length === 0 && (
+              <button className="clear" onClick={refreshTrending}>Try again</button>
+            )}
           </div>
-        </article>
-      </section>}
-      <section className="trending" id="trending"><div className="section-kicker"><i/> POPULAR RIGHT NOW</div><div className="section-head results-head"><h2>Trending now</h2><span className="result-count">{filtered.length} {filtered.length === 1 ? 'video' : 'videos'}</span></div>{youtubeLoading && liveVideos.length === 0 && <p role="status" className="preview-note">Loading videos from YouTube…</p>}{youtubeError && <p role="alert" className="preview-note">{youtubeError}{liveVideos.length === 0 ? ' Showing sample videos instead.' : ''}</p>}<div className="video-grid">{filtered.map(v=><VideoCard key={v.id} video={v} saved={savedIds.includes(v.id)} onToggleSave={toggleSave} onPreview={setSelectedVideo}/>)}</div>{nextPageToken && <div className="load-more-wrap"><button className="secondary-button" onClick={loadMoreVideos} disabled={loadingMore}>{loadingMore ? 'Loading videos…' : 'Show more videos'}</button></div>}{filtered.length===0 && !youtubeLoading && <div className="empty"><p>No videos match those filters. Try another search or category.</p><button className="clear" onClick={clearFilters}>Clear filters and try again</button></div>}<p className="preview-note">
+        )}
+      </section>
+      <section className="trending" id="discover-feed">
+        <div className="section-kicker"><i /> CURATED FOR DISCOVERY</div>
+        <div className="section-head results-head">
+          <h2>Discover videos</h2>
+          <span className="result-count">
+            {filtered.length} {filtered.length === 1 ? 'video' : 'videos'}
+          </span>
+          <button className="clear" onClick={refreshFeed}>
+            Refresh discoveries
+          </button>
+          <button className="clear" onClick={clearFilters}>
+            Clear filters
+          </button>
+        </div>
+        <FeedFilterControls
+          id="interests"
+          categories={youtubeCategories}
+          category={category}
+          duration={duration}
+          date={date}
+          sort={sort}
+          onCategoryChange={(selectedCategory) => void changeDiscoveryCategory(selectedCategory)}
+          onDurationChange={setDuration}
+          onDateChange={setDate}
+          onSortChange={setSort}
+        />
+        <p className="preview-note">
+          Duration, upload date and sort filters apply to videos currently loaded.
+        </p>
+        {youtubeLoading && liveVideos.length === 0 && (
+          <p role="status" className="preview-note">
+            Loading videos from YouTube…
+          </p>
+        )}
+        {youtubeError && (
+          <p role="alert" className="preview-note">
+            {youtubeError}{' '}
+            <button className="clear" onClick={refreshFeed}>
+              {searchTerm ? 'Retry search' : 'Refresh discoveries'}
+            </button>
+          </p>
+        )}
+        <div className="video-grid">
+          {filtered.map((video) => (
+            <VideoCard
+              key={video.id}
+              video={video}
+              saved={savedIds.includes(video.id)}
+              onToggleSave={toggleSave}
+              onPreview={setSelectedVideo}
+            />
+          ))}
+        </div>
+        {nextPageToken && (
+          <div className="load-more-wrap">
+            <button
+              className="secondary-button"
+              onClick={loadMoreVideos}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Loading videos…' : 'Show more videos'}
+            </button>
+          </div>
+        )}
+        {filtered.length === 0 && !youtubeLoading && !youtubeError && (
+          <div className="empty">
+            <p>
+              {liveVideos.length > 0
+                ? 'No videos match those filters. Try another search or category.'
+                : nextPageToken
+                  ? 'No new videos were found on this page. Load more to continue.'
+                  : 'YouTube returned no videos for this query.'}
+            </p>
+            <button
+              className="clear"
+              onClick={liveVideos.length > 0 ? clearFilters : refreshFeed}
+            >
+              {liveVideos.length > 0
+                ? 'Clear filters and try again'
+                : searchTerm
+                  ? 'Retry search'
+                  : 'Try another discovery query'}
+            </button>
+          </div>
+        )}
+        <p className="preview-note">
         Discover real videos from YouTube. Personalized relevance scoring is still being improved.</p></section>
       <section className="continue" id="watch-later">
         <div className="section-kicker"><i /> YOUR COLLECTION</div>
@@ -962,45 +1573,9 @@ export default function Home() {
 
   <h2>Continue watching</h2>
 
-  {nextVideoToExplore ? (
-    <article className="continue-card">
-      <div
-        className="continue-art"
-        style={
-          nextVideoToExplore.thumbnail
-            ? {
-                backgroundImage: `url("${nextVideoToExplore.thumbnail}")`,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-              }
-            : undefined
-        }
-      />
-
-      <div className="continue-info">
-        <div className="category-label">
-          {nextVideoToExplore.category}
-        </div>
-
-        <h3>{nextVideoToExplore.title}</h3>
-
-        <p>
-          {nextVideoToExplore.creator} · {nextVideoToExplore.duration}
-        </p>
-
-        <button
-          className="text-action"
-          onClick={() => setSelectedVideo(nextVideoToExplore)}
-        >
-          Explore video ↗
-        </button>
-      </div>
-    </article>
-  ) : (
-    <p className="preview-note">
-      Your watch history will appear here when playback tracking is available.
-    </p>
-  )}
+  <p className="preview-note">
+    Your watch history will appear here when playback tracking is available.
+  </p>
 </section>
       <footer><b>Discoverly</b><span>Find videos worth your time.</span><a href="#top">Back to top ↑</a></footer>
     </div>
