@@ -8,6 +8,7 @@ type Video = {
   category: string;
   categoryId?: string;
   title: string;
+  description?: string;
   creator: string;
   views: string;
   age: string;
@@ -32,6 +33,7 @@ const discoveryQueries = [
 ];
 const discoveryRotationStorageKey = 'discoverly:discovery-query-index';
 const recentVideoHistoryStorageKey = 'discoverly:recent-videos';
+const recentTrendingHistoryStorageKey = 'discoverly:recent-trending-videos';
 const recentVideoHistoryLimit = 100;
 const recentVideoHistoryMaxAge = 14 * 24 * 60 * 60 * 1000;
 const discoveryPageSize = 9;
@@ -58,12 +60,26 @@ const preferenceYouTubeCategoryIds: Record<string, string> = {
   'personal development': '27',
 };
 
-function getNextDiscoveryQuery(preferredTopics: string[]) {
-  const queryOptions = preferredTopics.length > 0 ? preferredTopics : discoveryQueries;
+function getDiscoveryQueries(preferredTopics: string[]) {
+  const topicQueries = [...new Set(
+    preferredTopics.map((topic) => topic.trim()).filter(Boolean)
+  )].flatMap((topic) => [
+    `${topic} explained`,
+    `${topic} documentary`,
+    `how ${topic} works`,
+    `${topic} ideas and projects`,
+  ]);
+
+  return [...topicQueries, ...discoveryQueries];
+}
+
+function getNextDiscoveryQuery(preferredTopics: string[], userId: string | null) {
+  const queryOptions = getDiscoveryQueries(preferredTopics);
+  const rotationKey = `${discoveryRotationStorageKey}:${userId ?? 'guest'}`;
   let index = 0;
 
   try {
-    const storedIndex = window.localStorage.getItem(discoveryRotationStorageKey);
+    const storedIndex = window.localStorage.getItem(rotationKey);
     if (storedIndex !== null) {
       const parsedIndex = Number(storedIndex);
       if (
@@ -80,7 +96,7 @@ function getNextDiscoveryQuery(preferredTopics: string[]) {
 
   try {
     window.localStorage.setItem(
-      discoveryRotationStorageKey,
+      rotationKey,
       String((index + 1) % queryOptions.length)
     );
   } catch (error) {
@@ -145,6 +161,59 @@ function filterPreviouslyDisplayedVideos(
   });
 }
 
+function getTrendingHistoryStorageKey(userId: string | null) {
+  return `${recentTrendingHistoryStorageKey}:${userId ?? 'guest'}`;
+}
+
+function readRecentTrendingHistory(userId: string | null): RecentVideoEntry[] {
+  try {
+    const storedHistory = window.localStorage.getItem(
+      getTrendingHistoryStorageKey(userId)
+    );
+    if (!storedHistory) return [];
+
+    const parsedHistory: unknown = JSON.parse(storedHistory);
+    if (!Array.isArray(parsedHistory)) {
+      throw new Error('Stored recent Trending history is not an array.');
+    }
+
+    const cutoff = Date.now() - recentVideoHistoryMaxAge;
+    return parsedHistory
+      .filter(
+        (entry): entry is RecentVideoEntry =>
+          typeof entry?.id === 'string' &&
+          typeof entry?.seenAt === 'number' &&
+          Number.isFinite(entry.seenAt) &&
+          entry.seenAt >= cutoff
+      )
+      .sort((a, b) => b.seenAt - a.seenAt)
+      .slice(0, recentVideoHistoryLimit);
+  } catch (error) {
+    console.warn('Could not read recent Trending history:', error);
+    return [];
+  }
+}
+
+function filterRecentlyDisplayedTrendingVideos(
+  items: Video[],
+  userId: string | null,
+  existingIds = new Set<string>(),
+  allowRecentlySeen = false
+) {
+  const recentIds = new Set(
+    allowRecentlySeen
+      ? []
+      : readRecentTrendingHistory(userId).map((entry) => entry.id)
+  );
+  const uniqueIds = new Set(existingIds);
+
+  return items.filter((video) => {
+    if (recentIds.has(video.id) || uniqueIds.has(video.id)) return false;
+    uniqueIds.add(video.id);
+    return true;
+  });
+}
+
 function recordDisplayedVideos(userId: string, displayedVideos: Video[]) {
   if (displayedVideos.length === 0) return;
 
@@ -169,6 +238,36 @@ function recordDisplayedVideos(userId: string, displayedVideos: Video[]) {
     );
   } catch (error) {
     console.warn('Could not save recent-video history:', error);
+  }
+}
+
+function recordDisplayedTrendingVideos(
+  userId: string | null,
+  displayedVideos: Video[]
+) {
+  if (displayedVideos.length === 0) return;
+
+  try {
+    const history = new Map(
+      readRecentTrendingHistory(userId).map((entry) => [entry.id, entry.seenAt])
+    );
+    const seenAt = Date.now();
+
+    for (const video of displayedVideos) {
+      history.set(video.id, seenAt);
+    }
+
+    window.localStorage.setItem(
+      getTrendingHistoryStorageKey(userId),
+      JSON.stringify(
+        [...history]
+          .map(([id, timestamp]) => ({ id, seenAt: timestamp }))
+          .sort((a, b) => b.seenAt - a.seenAt)
+          .slice(0, recentVideoHistoryLimit)
+      )
+    );
+  } catch (error) {
+    console.warn('Could not save recent Trending history:', error);
   }
 }
 
@@ -225,6 +324,7 @@ const formatYouTubeViews = (views: number) => {
 type YouTubeVideo = {
   id: string;
   title: string;
+  description?: string;
   creator: string;
   thumbnail: string;
   views: number;
@@ -252,6 +352,7 @@ const convertYouTubeVideos = (items: YouTubeVideo[]): Video[] => {
     category: item.category.toUpperCase(),
     categoryId: item.categoryId,
     title: item.title,
+    description: item.description,
     creator: item.creator,
     views: formatYouTubeViews(item.views),
     age: formatYouTubeAge(item.publishedAt),
@@ -286,6 +387,49 @@ type VideoFilters = {
   excludedTopics: string[];
   preservePopularityOrder?: boolean;
 };
+
+function normalizeForMatching(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function topicEvidence(topic: string, text: string, weight: number) {
+  const normalizedTopic = normalizeForMatching(topic);
+  const normalizedText = normalizeForMatching(text);
+  if (!normalizedTopic || !normalizedText) return 0;
+  if (` ${normalizedText} `.includes(` ${normalizedTopic} `)) return weight;
+
+  const topicWords = normalizedTopic.split(' ').filter((word) => word.length > 2);
+  if (topicWords.length === 0) return 0;
+  const textWords = new Set(normalizedText.split(' '));
+  const overlap = topicWords.filter((word) => textWords.has(word)).length;
+  const ratio = overlap / topicWords.length;
+  if (ratio >= 0.75) return weight * 0.65;
+  if (ratio >= 0.5) return weight * 0.3;
+  return 0;
+}
+
+function getVideoRelevanceScore(
+  video: Video,
+  preferredTopics: string[],
+  excludedTopics: string[]
+) {
+  const preferredEvidence = preferredTopics.reduce((total, topic) => {
+    return total +
+      topicEvidence(topic, video.title, 6) +
+      topicEvidence(topic, video.description ?? '', 2) +
+      topicEvidence(topic, video.creator, 1) +
+      topicEvidence(topic, video.category, 1.5);
+  }, 0);
+  const excludedEvidence = excludedTopics.reduce((total, topic) => {
+    return total +
+      topicEvidence(topic, video.title, 6) +
+      topicEvidence(topic, video.description ?? '', 2) +
+      topicEvidence(topic, video.creator, 1) +
+      topicEvidence(topic, video.category, 1.5);
+  }, 0);
+
+  return preferredEvidence - excludedEvidence;
+}
 
 function filterAndSortVideos(videos: Video[], filters: VideoFilters) {
   const { category, duration, date, sort, preferredTopics, excludedTopics } = filters;
@@ -332,20 +476,51 @@ function filterAndSortVideos(videos: Video[], filters: VideoFilters) {
     };
     list.sort((a, b) => parseViews(b.views) - parseViews(a.views));
   } else if (sort === 'Best match') {
-    const score = (video: Video) => {
-      const topic = video.category.trim().toLowerCase();
-      if (excludedTopics.some((item) => item.trim().toLowerCase() === topic)) {
-        return video.score - 15;
-      }
-      if (preferredTopics.some((item) => item.trim().toLowerCase() === topic)) {
-        return video.score + 15;
-      }
-      return video.score;
-    };
-    list.sort((a, b) => score(b) - score(a));
+    list.sort(
+      (a, b) =>
+        getVideoRelevanceScore(b, preferredTopics, excludedTopics) -
+        getVideoRelevanceScore(a, preferredTopics, excludedTopics)
+    );
   }
 
   return list;
+}
+
+function diversifyDiscoveryVideos(videos: Video[]) {
+  const remaining = videos.map((video, originalIndex) => ({
+    video,
+    originalIndex,
+  }));
+  const creatorCounts = new Map<string, number>();
+  const topicCounts = new Map<string, number>();
+  const diversified: Video[] = [];
+
+  while (remaining.length > 0) {
+    let bestIndex = 0;
+    let bestPenalty = Number.POSITIVE_INFINITY;
+
+    remaining.forEach(({ video, originalIndex }, index) => {
+      const creator = normalizeForMatching(video.creator);
+      const topic = video.categoryId || normalizeForMatching(video.category);
+      const penalty =
+        originalIndex +
+        (creatorCounts.get(creator) ?? 0) * 2 +
+        (topicCounts.get(topic) ?? 0);
+      if (penalty < bestPenalty) {
+        bestPenalty = penalty;
+        bestIndex = index;
+      }
+    });
+
+    const [{ video }] = remaining.splice(bestIndex, 1);
+    diversified.push(video);
+    const creator = normalizeForMatching(video.creator);
+    const topic = video.categoryId || normalizeForMatching(video.category);
+    creatorCounts.set(creator, (creatorCounts.get(creator) ?? 0) + 1);
+    topicCounts.set(topic, (topicCounts.get(topic) ?? 0) + 1);
+  }
+
+  return diversified;
 }
 
 const durationOptions = ['Any length', 'Under 10 min', '10–20 min', 'Over 20 min'];
@@ -453,16 +628,21 @@ export default function Home() {
   const [trendingLoading, setTrendingLoading] = useState(false);
   const [trendingLoadingMore, setTrendingLoadingMore] = useState(false);
   const [trendingError, setTrendingError] = useState('');
+  const [trendingNoNewVideos, setTrendingNoNewVideos] = useState(false);
   const [trendingNextPageToken, setTrendingNextPageToken] = useState<string | null>(null);
   const [activeDiscoveryQuery, setActiveDiscoveryQuery] = useState('');
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const videoRequestGenerationRef = useRef(0);
   const loadingMoreLockRef = useRef(false);
+  const discoveryReplacementLockRef = useRef(false);
+  const discoveryConsumedPageTokensRef = useRef(new Set<string>());
   const initialDiscoveryStartedRef = useRef(false);
   const activeDiscoveryQueryRef = useRef('');
   const trendingRequestGenerationRef = useRef(0);
   const trendingLoadingMoreLockRef = useRef(false);
+  const trendingReplacementLockRef = useRef(false);
+  const trendingConsumedPageTokensRef = useRef(new Set<string>());
   const trendingInitialLoadStartedRef = useRef(false);
   const trendingCategoryRef = useRef('All categories');
   const [searchTerm, setSearchTerm] = useState('');
@@ -485,13 +665,13 @@ export default function Home() {
       return activeDiscoveryQueryRef.current;
     }
 
-    const discoveryQuery = getNextDiscoveryQuery(preferredTopics);
+    const discoveryQuery = getNextDiscoveryQuery(preferredTopics, userId);
     storeActiveDiscoveryQuery(discoveryQuery);
     return discoveryQuery;
   };
 
   const rotateActiveDiscoveryQuery = () => {
-    const discoveryQuery = getNextDiscoveryQuery(preferredTopics);
+    const discoveryQuery = getNextDiscoveryQuery(preferredTopics, userId);
     storeActiveDiscoveryQuery(discoveryQuery);
     return discoveryQuery;
   };
@@ -551,8 +731,12 @@ export default function Home() {
       if (accountChanged) {
         videoRequestGenerationRef.current += 1;
         loadingMoreLockRef.current = false;
+        discoveryReplacementLockRef.current = false;
+        discoveryConsumedPageTokensRef.current.clear();
         trendingRequestGenerationRef.current += 1;
         trendingLoadingMoreLockRef.current = false;
+        trendingReplacementLockRef.current = false;
+        trendingConsumedPageTokensRef.current.clear();
         initialDiscoveryStartedRef.current = false;
         trendingInitialLoadStartedRef.current = false;
         activeDiscoveryQueryRef.current = '';
@@ -562,6 +746,10 @@ export default function Home() {
         setTrendingDuration('Any length');
         setTrendingDate('Any time');
         setTrendingSort('Most popular');
+        setCategory('All categories');
+        setDuration('Any length');
+        setDate('Any time');
+        setSort('Best match');
         setPreferencesReady(false);
         setSavedIds([]);
         setSavedVideos([]);
@@ -773,21 +961,49 @@ export default function Home() {
   const requestTrendingVideos = async (
     selectedCategory: string,
     pageToken?: string,
-    replaceResults = false
+    replaceResults = false,
+    allowRecentlySeen = false,
+    supersede = false
   ) => {
     const isLoadingMore = Boolean(pageToken) && !replaceResults;
-    if (isLoadingMore && trendingLoadingMoreLockRef.current) return;
+    if (pageToken && trendingConsumedPageTokensRef.current.has(pageToken)) {
+      setTrendingError(
+        'YouTube repeated a Trending page token. Refresh the feed to continue.'
+      );
+      return;
+    }
+    if (pageToken) trendingConsumedPageTokensRef.current.add(pageToken);
+
+    if (isLoadingMore) {
+      if (
+        trendingLoadingMoreLockRef.current ||
+        trendingReplacementLockRef.current
+      ) {
+        return;
+      }
+    } else {
+      if (
+        !supersede &&
+        (trendingReplacementLockRef.current ||
+          trendingLoadingMoreLockRef.current)
+      ) {
+        return;
+      }
+      trendingReplacementLockRef.current = true;
+      trendingLoadingMoreLockRef.current = false;
+      setTrendingLoadingMore(false);
+    }
 
     if (isLoadingMore) {
       trendingLoadingMoreLockRef.current = true;
       setTrendingLoadingMore(true);
     } else {
       trendingRequestGenerationRef.current += 1;
-      trendingLoadingMoreLockRef.current = false;
-      setTrendingLoadingMore(false);
       setTrendingLoading(true);
       setTrendingVideos([]);
       setTrendingNextPageToken(null);
+      setTrendingNoNewVideos(false);
+      if (!pageToken) trendingConsumedPageTokensRef.current.clear();
     }
 
     const requestGeneration = trendingRequestGenerationRef.current;
@@ -798,7 +1014,13 @@ export default function Home() {
 
       if (requestGeneration !== trendingRequestGenerationRef.current) return;
 
-      const videos = convertYouTubeVideos(data.videos);
+      const videos = filterRecentlyDisplayedTrendingVideos(
+        convertYouTubeVideos(data.videos),
+        activeUserIdRef.current,
+        isLoadingMore ? new Set(trendingVideos.map((video) => video.id)) : new Set(),
+        allowRecentlySeen
+      );
+      setTrendingNoNewVideos(data.videos.length > 0 && videos.length === 0);
       if (isLoadingMore) {
         setTrendingVideos((current) => {
           const existingIds = new Set(current.map((video) => video.id));
@@ -814,7 +1036,15 @@ export default function Home() {
       }
 
       setTrendingCategories(data.categories);
-      setTrendingNextPageToken(data.nextPageToken);
+      const nextPageToken = data.nextPageToken;
+      if (nextPageToken && trendingConsumedPageTokensRef.current.has(nextPageToken)) {
+        setTrendingError(
+          'YouTube repeated a Trending page token. Refresh the feed to continue.'
+        );
+        setTrendingNextPageToken(null);
+      } else {
+        setTrendingNextPageToken(nextPageToken);
+      }
     } catch (error) {
       if (requestGeneration === trendingRequestGenerationRef.current) {
         console.error('YouTube Trending error:', error);
@@ -830,6 +1060,7 @@ export default function Home() {
           trendingLoadingMoreLockRef.current = false;
           setTrendingLoadingMore(false);
         } else {
+          trendingReplacementLockRef.current = false;
           setTrendingLoading(false);
         }
       }
@@ -837,71 +1068,56 @@ export default function Home() {
   };
 
   const refreshTrending = () => {
-    if (trendingNextPageToken) {
-      void requestTrendingVideos(
-        trendingCategoryRef.current,
-        trendingNextPageToken,
-        true
-      );
-      return;
-    }
+    if (
+      trendingReplacementLockRef.current ||
+      trendingLoadingMoreLockRef.current
+    ) return;
 
-    void requestTrendingVideos(trendingCategoryRef.current);
+    void requestTrendingVideos(
+      trendingCategoryRef.current,
+      undefined,
+      false,
+      false,
+      true
+    );
+  };
+
+  const showRecentTrendingVideos = () => {
+    void requestTrendingVideos(
+      trendingCategoryRef.current,
+      undefined,
+      false,
+      true,
+      true
+    );
   };
 
   const loadMoreTrendingVideos = () => {
-    if (!trendingNextPageToken || trendingLoadingMoreLockRef.current) return;
+    if (
+      !trendingNextPageToken ||
+      trendingLoadingMoreLockRef.current ||
+      trendingReplacementLockRef.current
+    ) return;
     void requestTrendingVideos(
       trendingCategoryRef.current,
       trendingNextPageToken
     );
   };
 
-  const changeDiscoveryCategory = async (selectedCategory: string) => {
-    const requestQuery = searchTerm || getActiveDiscoveryQuery();
-    const requestGeneration = invalidateVideoRequests();
-    initialDiscoveryStartedRef.current = true;
+  const changeDiscoveryCategory = (selectedCategory: string) => {
     setCategory(selectedCategory);
-    setYoutubeLoading(true);
-    setYoutubeError('');
-    setNextPageToken(null);
-    setLiveVideos([]);
-
-    try {
-      const data = await fetchVideos(
-        requestQuery,
-        selectedCategory,
-        undefined,
-        'relevance',
-        searchTerm ? 30 : discoveryPageSize
-      );
-
-      if (requestGeneration !== videoRequestGenerationRef.current) return;
-
-      setLiveVideos(
-        filterPreviouslyDisplayedVideos(
-          convertYouTubeVideos(data.videos ?? []),
-          searchTerm ? null : activeUserIdRef.current
-        )
-      );
-      setYoutubeCategories(data.categories ?? []);
-      setNextPageToken(data.nextPageToken ?? null);
-    } catch (error) {
-      if (requestGeneration === videoRequestGenerationRef.current) {
-        setYoutubeError(
-          error instanceof Error ? error.message : 'Could not load this category.'
-        );
-      }
-    } finally {
-      if (requestGeneration === videoRequestGenerationRef.current) {
-        setYoutubeLoading(false);
-      }
-    }
+    void performSearch(
+      searchTerm,
+      selectedCategory,
+      activeDiscoveryQueryRef.current || getActiveDiscoveryQuery(),
+      true
+    );
   };
 
   const invalidateVideoRequests = () => {
     const generation = ++videoRequestGenerationRef.current;
     loadingMoreLockRef.current = false;
+    discoveryConsumedPageTokensRef.current.clear();
     setLoadingMore(false);
     return generation;
   };
@@ -910,8 +1126,16 @@ export default function Home() {
     term: string,
     selectedCategory: string,
     discoveryQuery: string,
-    pageToken?: string
+    supersede = false
   ) => {
+    if (
+      !supersede &&
+      (discoveryReplacementLockRef.current || loadingMoreLockRef.current)
+    ) {
+      return;
+    }
+
+    discoveryReplacementLockRef.current = true;
     initialDiscoveryStartedRef.current = true;
     const requestGeneration = invalidateVideoRequests();
     setYoutubeLoading(true);
@@ -929,7 +1153,7 @@ export default function Home() {
       const data = await fetchVideos(
         requestQuery,
         selectedCategory,
-        pageToken,
+        undefined,
         order,
         normalizedTerm ? 30 : discoveryPageSize
       );
@@ -943,7 +1167,15 @@ export default function Home() {
         )
       );
       setYoutubeCategories(data.categories ?? []);
-      setNextPageToken(data.nextPageToken ?? null);
+      const returnedPageToken = data.nextPageToken ?? null;
+      if (returnedPageToken && discoveryConsumedPageTokensRef.current.has(returnedPageToken)) {
+        setYoutubeError(
+          'YouTube repeated a discovery page token. Refresh discoveries to continue.'
+        );
+        setNextPageToken(null);
+      } else {
+        setNextPageToken(returnedPageToken);
+      }
     } catch (error) {
       if (requestGeneration === videoRequestGenerationRef.current) {
         console.error('YouTube search error:', error);
@@ -953,14 +1185,25 @@ export default function Home() {
       }
     } finally {
       if (requestGeneration === videoRequestGenerationRef.current) {
+        discoveryReplacementLockRef.current = false;
         setYoutubeLoading(false);
       }
     }
   };
 
   const loadMoreVideos = async () => {
-    if (!nextPageToken || loadingMoreLockRef.current) return;
+    if (
+      !nextPageToken ||
+      loadingMoreLockRef.current ||
+      discoveryReplacementLockRef.current
+    ) return;
 
+    if (discoveryConsumedPageTokensRef.current.has(nextPageToken)) {
+      setYoutubeError('YouTube repeated a discovery page token. Refresh discoveries to continue.');
+      setNextPageToken(null);
+      return;
+    }
+    discoveryConsumedPageTokensRef.current.add(nextPageToken);
     loadingMoreLockRef.current = true;
     const requestGeneration = videoRequestGenerationRef.current;
     const requestPageToken = nextPageToken;
@@ -996,7 +1239,15 @@ export default function Home() {
         return [...current, ...videosToAppend];
       });
 
-      setNextPageToken(data.nextPageToken ?? null);
+      const returnedPageToken = data.nextPageToken ?? null;
+      if (returnedPageToken && discoveryConsumedPageTokensRef.current.has(returnedPageToken)) {
+        setYoutubeError(
+          'YouTube repeated a discovery page token. Refresh discoveries to continue.'
+        );
+        setNextPageToken(null);
+      } else {
+        setNextPageToken(returnedPageToken);
+      }
     } catch (error) {
       if (requestGeneration === videoRequestGenerationRef.current) {
         console.error('Could not load more videos:', error);
@@ -1016,7 +1267,7 @@ export default function Home() {
     if (!authReady || !preferencesReady || initialDiscoveryStartedRef.current) return;
 
     initialDiscoveryStartedRef.current = true;
-    const discoveryQuery = getNextDiscoveryQuery(preferredTopics);
+    const discoveryQuery = getNextDiscoveryQuery(preferredTopics, userId);
     storeActiveDiscoveryQuery(discoveryQuery);
     void performSearch('', 'All categories', discoveryQuery);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1042,14 +1293,20 @@ export default function Home() {
   };
 
   const filtered = useMemo(
-    () => filterAndSortVideos(liveVideos, {
-      category,
-      duration,
-      date,
-      sort,
-      preferredTopics,
-      excludedTopics,
-    }),
+    () => {
+      const sortedVideos = filterAndSortVideos(liveVideos, {
+        category,
+        duration,
+        date,
+        sort,
+        preferredTopics,
+        excludedTopics,
+      });
+
+      return sort === 'Best match'
+        ? diversifyDiscoveryVideos(sortedVideos)
+        : sortedVideos;
+    },
     [category, date, duration, excludedTopics, liveVideos, preferredTopics, sort]
   );
   const filteredTrending = useMemo(
@@ -1078,6 +1335,10 @@ export default function Home() {
 
     recordDisplayedVideos(userId, filtered);
   }, [filtered, userId]);
+
+  useEffect(() => {
+    recordDisplayedTrendingVideos(userId, filteredTrending);
+  }, [filteredTrending, userId]);
 
   const allVideos = [...liveVideos, ...trendingVideos].filter(
     (video, index, list) =>
@@ -1178,7 +1439,7 @@ export default function Home() {
     setDate('Any time');
     setSort('Best match');
     setQuery('');
-    void performSearch('', 'All categories', getActiveDiscoveryQuery());
+    void performSearch('', 'All categories', getActiveDiscoveryQuery(), true);
   };
   const clearTrendingFilters = () => {
     trendingCategoryRef.current = 'All categories';
@@ -1186,18 +1447,10 @@ export default function Home() {
     setTrendingDuration('Any length');
     setTrendingDate('Any time');
     setTrendingSort('Most popular');
-    void requestTrendingVideos('All categories');
+    void requestTrendingVideos('All categories', undefined, false, false, true);
   };
   const refreshFeed = () => {
-    if (nextPageToken) {
-      void performSearch(
-        searchTerm,
-        category,
-        activeDiscoveryQueryRef.current,
-        nextPageToken
-      );
-      return;
-    }
+    if (discoveryReplacementLockRef.current || loadingMoreLockRef.current) return;
 
     if (searchTerm) {
       void performSearch(searchTerm, category, activeDiscoveryQuery);
@@ -1221,7 +1474,8 @@ export default function Home() {
           void performSearch(
             query,
             category,
-            query.trim() ? activeDiscoveryQuery : getActiveDiscoveryQuery()
+            query.trim() ? activeDiscoveryQuery : getActiveDiscoveryQuery(),
+            true
           );
           scrollTo('discover-feed');
         }}
@@ -1265,7 +1519,12 @@ export default function Home() {
                 aria-selected="false"
                 onClick={() => {
                   setQuery(suggestion);
-                  void performSearch(suggestion, category, activeDiscoveryQuery);
+                  void performSearch(
+                    suggestion,
+                    category,
+                    activeDiscoveryQuery,
+                    true
+                  );
                   scrollTo('discover-feed');
                 }}
               >
@@ -1348,7 +1607,7 @@ export default function Home() {
           <button
             className="clear"
             onClick={refreshTrending}
-            disabled={trendingLoading}
+            disabled={trendingLoading || trendingLoadingMore}
           >
             Refresh Trending
           </button>
@@ -1366,14 +1625,20 @@ export default function Home() {
           onCategoryChange={(selectedCategory) => {
             trendingCategoryRef.current = selectedCategory;
             setTrendingCategory(selectedCategory);
-            void requestTrendingVideos(selectedCategory);
+            void requestTrendingVideos(
+              selectedCategory,
+              undefined,
+              false,
+              false,
+              true
+            );
           }}
           onDurationChange={setTrendingDuration}
           onDateChange={setTrendingDate}
           onSortChange={setTrendingSort}
         />
         <p className="preview-note">
-          Filters apply to loaded Trending videos. “Most popular” keeps YouTube’s chart order.
+          Filters apply to loaded videos. “Most popular” preserves YouTube’s chart order; “Best match” ranks by video metadata and your topics.
         </p>
         {trendingLoading && trendingVideos.length === 0 && (
           <p role="status" className="preview-note">
@@ -1404,7 +1669,7 @@ export default function Home() {
             <button
               className="secondary-button"
               onClick={loadMoreTrendingVideos}
-              disabled={trendingLoadingMore}
+              disabled={trendingLoadingMore || trendingLoading}
             >
               {trendingLoadingMore ? 'Loading videos…' : 'Load more'}
             </button>
@@ -1415,10 +1680,17 @@ export default function Home() {
             <p>
               {trendingVideos.length > 0
                 ? 'No loaded Trending videos match these filters. Load more or adjust the filters.'
-                : `YouTube returned no popular videos for Nigeria${trendingCategory !== 'All categories' ? ' in this category' : ''}.`}
+                : trendingNoNewVideos
+                  ? 'You have already seen the videos on this Trending page recently. Load more or show the chart results again.'
+                  : `YouTube returned no popular videos for Nigeria${trendingCategory !== 'All categories' ? ' in this category' : ''}.`}
             </p>
             {trendingVideos.length === 0 && (
-              <button className="clear" onClick={refreshTrending}>Try again</button>
+              <button
+                className="clear"
+                onClick={trendingNoNewVideos ? showRecentTrendingVideos : refreshTrending}
+              >
+                {trendingNoNewVideos ? 'Show chart results again' : 'Try again'}
+              </button>
             )}
           </div>
         )}
@@ -1430,7 +1702,11 @@ export default function Home() {
           <span className="result-count">
             {filtered.length} {filtered.length === 1 ? 'video' : 'videos'}
           </span>
-          <button className="clear" onClick={refreshFeed}>
+          <button
+            className="clear"
+            onClick={refreshFeed}
+            disabled={youtubeLoading || loadingMore}
+          >
             Refresh discoveries
           </button>
           <button className="clear" onClick={clearFilters}>
@@ -1481,7 +1757,7 @@ export default function Home() {
             <button
               className="secondary-button"
               onClick={loadMoreVideos}
-              disabled={loadingMore}
+              disabled={loadingMore || youtubeLoading}
             >
               {loadingMore ? 'Loading videos…' : 'Show more videos'}
             </button>

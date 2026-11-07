@@ -1,21 +1,73 @@
-# Discoverly — UI rebuild (preview)
+# Discoverly
 
-A responsive Next.js + TypeScript recreation of the supplied Discoverly desktop and mobile references.
+Discoverly is a YouTube video discovery app. It presents a personalized Discovery
+feed alongside a separate YouTube popularity chart for Nigeria, with search,
+filters, and a persistent Watch Later list.
 
-## Run locally
-1. Install Node.js 20.9 or newer.
-2. Open this folder in VS Code or a terminal.
-3. Run `npm install`.
-4. Run `npm run dev` and open `http://localhost:3000`.
-5. Run `npm run build` to check the production build.
+## Technology
 
-## Current scope
-- Rebuilt the main visual composition: muted sage background, forest-green hero, lime accent, serif headings, neumorphic controls, interest chips, inset filter controls, featured pick, match-score rings, trending cards, and Continue Watching progress track.
-- Search and interest/category controls filter the illustrative cards locally. The sort control supports popularity order, example match-score order, and a basic date-label sort.
-- Bookmark buttons are visual/local state only and do not persist after refresh.
+- Next.js 15 with the App Router
+- React 19 and TypeScript
+- Supabase Auth and database access
+- YouTube Data API v3
 
-## Not implemented yet
-This is a UI prototype, not a connected product. Cards, metadata, match scores, and Continue Watching progress are example content. There is no YouTube API connection, real relevance model, login, persistent bookmarks/preferences, backend, or browser extension sync. Do not present example scores as verified ranking results.
+## Features
 
-## Next phase
-Visually compare the UI against both supplied references, adjust remaining differences, then choose a real video data source and define the relevance-score formula before connecting search.
+- Discovery searches use rotating, curated queries informed by saved topic
+  preferences. Users can also search YouTube directly.
+- Trending uses YouTube's `videos.list` `mostPopular` chart with `regionCode=NG`,
+  separate category selection, refresh, and pagination.
+- Discovery and Trending maintain independent filters, loading, errors, refresh,
+  and pagination state.
+- Best Match uses available video metadata and preferred/excluded topics.
+  Excluded topics are penalized, not filtered out.
+- Recent Discovery and Trending history reduces repeated videos in the browser.
+- Supabase authentication supports signup, login, and persistent sessions.
+  Onboarding and the preferences page store preferred and excluded topics.
+- Signed-in users can save and remove videos from Watch Later; saved videos
+  persist in their account.
+
+## Requirements
+
+- Node.js 20.9 or newer
+- A Supabase project configured for the application's existing auth and data
+  tables
+- A Google API key with YouTube Data API v3 enabled
+
+## Local development
+
+1. Install dependencies:
+
+   ```sh
+   npm install
+   ```
+
+2. Create `.env.local` in the project root and set:
+
+   ```text
+   NEXT_PUBLIC_SUPABASE_URL=your-supabase-project-url
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
+   YOUTUBE_API_KEY=your-youtube-data-api-key
+   ```
+
+   Keep real credentials out of source control. The YouTube API key is used by
+   the server-side route and should not be exposed in client code.
+
+3. Start the development server:
+
+   ```sh
+   npm run dev
+   ```
+
+4. Open [http://localhost:3000](http://localhost:3000).
+
+## Checks
+
+```sh
+npx.cmd tsc --noEmit
+npx.cmd eslint app/page.tsx app/api/youtube/route.ts
+npm run build
+```
+
+YouTube API availability, quota limits, and the Nigeria `mostPopular` chart
+depend on Google's live API response and the configured API key.

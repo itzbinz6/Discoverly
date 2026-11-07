@@ -21,6 +21,7 @@ type YouTubeVideo = {
   id: string;
   snippet: {
     title: string;
+    description?: string;
     channelTitle: string;
     publishedAt: string;
     categoryId?: string;
@@ -177,6 +178,7 @@ export async function GET(request: Request) {
       const videos = (trendingData.items ?? []).map((video) => ({
         id: video.id,
         title: video.snippet.title,
+        description: video.snippet.description ?? "",
         creator: video.snippet.channelTitle,
         thumbnail:
           video.snippet.thumbnails?.high?.url ??
@@ -288,9 +290,13 @@ export async function GET(request: Request) {
       ])
     );
 
-    const videoIds = (searchData.items ?? [])
-      .map((item) => item.id?.videoId)
-      .filter((id): id is string => Boolean(id));
+    const videoIds = [
+      ...new Set(
+        (searchData.items ?? [])
+          .map((item) => item.id?.videoId)
+          .filter((id): id is string => Boolean(id))
+      ),
+    ];
 
     if (videoIds.length === 0) {
       return noStoreJson({
@@ -326,23 +332,32 @@ export async function GET(request: Request) {
     const detailsData =
       (await detailsResponse.json()) as YouTubeVideosResponse;
 
-    const videos = (detailsData.items ?? []).map((video) => ({
-      id: video.id,
-      title: video.snippet.title,
-      creator: video.snippet.channelTitle,
-      thumbnail:
-        video.snippet.thumbnails?.high?.url ??
-        video.snippet.thumbnails?.medium?.url ??
-        video.snippet.thumbnails?.default?.url ??
-        "",
-      views: Number(video.statistics?.viewCount ?? 0),
-      publishedAt: video.snippet.publishedAt,
-      duration: video.contentDetails.duration,
-      categoryId: video.snippet.categoryId ?? "",
-      category:
-        categoryNames.get(video.snippet.categoryId ?? "") ?? "Other",
-      videoUrl: `https://www.youtube.com/watch?v=${video.id}`,
-    }));
+    const videoDetailsById = new Map(
+      (detailsData.items ?? []).map((video) => [video.id, video])
+    );
+    const videos = videoIds.flatMap((id) => {
+      const video = videoDetailsById.get(id);
+      if (!video) return [];
+
+      return [{
+        id: video.id,
+        title: video.snippet.title,
+        description: video.snippet.description ?? "",
+        creator: video.snippet.channelTitle,
+        thumbnail:
+          video.snippet.thumbnails?.high?.url ??
+          video.snippet.thumbnails?.medium?.url ??
+          video.snippet.thumbnails?.default?.url ??
+          "",
+        views: Number(video.statistics?.viewCount ?? 0),
+        publishedAt: video.snippet.publishedAt,
+        duration: video.contentDetails.duration,
+        categoryId: video.snippet.categoryId ?? "",
+        category:
+          categoryNames.get(video.snippet.categoryId ?? "") ?? "Other",
+        videoUrl: `https://www.youtube.com/watch?v=${video.id}`,
+      }];
+    });
 
     return noStoreJson({
       videos,
