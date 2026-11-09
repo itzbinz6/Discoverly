@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '../lib/supabase/client';
 
 type Video = {
@@ -584,8 +584,51 @@ function FeedFilterControls({
 }
 
 function Score({ value }: { value: number }) { return <div className="score-ring" aria-label={`Example match score ${value}`}><span>{value}</span></div>; }
-function VideoCard({ video, saved, onToggleSave, onPreview }: { video: Video; saved: boolean; onToggleSave: (id: string) => void; onPreview: (video: Video) => void }) {
-  return <article className="video-card"><div
+function VideoCard({
+  video,
+  saved,
+  onToggleSave,
+  onPreview,
+  onDisplay,
+}: {
+  video: Video;
+  saved: boolean;
+  onToggleSave: (id: string) => void;
+  onPreview: (video: Video) => void;
+  onDisplay?: (video: Video) => void;
+}) {
+  const articleRef = useRef<HTMLElement>(null);
+  const reportedVideoIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article || !onDisplay) return;
+
+    const reportDisplayed = () => {
+      if (reportedVideoIdRef.current === video.id) return;
+      reportedVideoIdRef.current = video.id;
+      onDisplay(video);
+    };
+
+    if (!('IntersectionObserver' in window)) {
+      reportDisplayed();
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+          reportDisplayed();
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.5 }
+    );
+    observer.observe(article);
+    return () => observer.disconnect();
+  }, [onDisplay, video]);
+
+  return <article ref={articleRef} className="video-card"><div
   className={`video-thumb ${video.tone}`}
   style={
     video.thumbnail
@@ -629,6 +672,7 @@ export default function Home() {
   const [trendingLoadingMore, setTrendingLoadingMore] = useState(false);
   const [trendingError, setTrendingError] = useState('');
   const [trendingNoNewVideos, setTrendingNoNewVideos] = useState(false);
+  const [trendingAllowRecentlySeen, setTrendingAllowRecentlySeen] = useState(false);
   const [trendingNextPageToken, setTrendingNextPageToken] = useState<string | null>(null);
   const [activeDiscoveryQuery, setActiveDiscoveryQuery] = useState('');
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
@@ -758,6 +802,8 @@ export default function Home() {
         setTrendingVideos([]);
         setNextPageToken(null);
         setTrendingNextPageToken(null);
+        setTrendingNoNewVideos(false);
+        setTrendingAllowRecentlySeen(false);
         setYoutubeLoading(false);
         setTrendingLoading(false);
         setLoadingMore(false);
@@ -966,21 +1012,21 @@ export default function Home() {
     supersede = false
   ) => {
     const isLoadingMore = Boolean(pageToken) && !replaceResults;
-    if (pageToken && trendingConsumedPageTokensRef.current.has(pageToken)) {
-      setTrendingError(
-        'YouTube repeated a Trending page token. Refresh the feed to continue.'
-      );
-      return;
-    }
-    if (pageToken) trendingConsumedPageTokensRef.current.add(pageToken);
-
     if (isLoadingMore) {
+      if (!pageToken) return;
       if (
         trendingLoadingMoreLockRef.current ||
         trendingReplacementLockRef.current
       ) {
         return;
       }
+      if (trendingConsumedPageTokensRef.current.has(pageToken)) {
+        setTrendingError(
+          'This Trending page was already requested. Refresh the chart to continue.'
+        );
+        return;
+      }
+      trendingConsumedPageTokensRef.current.add(pageToken);
     } else {
       if (
         !supersede &&
@@ -1002,10 +1048,12 @@ export default function Home() {
       setTrendingLoading(true);
       setTrendingVideos([]);
       setTrendingNextPageToken(null);
-      setTrendingNoNewVideos(false);
+      if (!allowRecentlySeen) setTrendingNoNewVideos(false);
+      setTrendingAllowRecentlySeen(allowRecentlySeen);
       if (!pageToken) trendingConsumedPageTokensRef.current.clear();
     }
 
+    if (isLoadingMore) setTrendingNoNewVideos(false);
     const requestGeneration = trendingRequestGenerationRef.current;
     setTrendingError('');
 
@@ -1018,7 +1066,7 @@ export default function Home() {
         convertYouTubeVideos(data.videos),
         activeUserIdRef.current,
         isLoadingMore ? new Set(trendingVideos.map((video) => video.id)) : new Set(),
-        allowRecentlySeen
+        isLoadingMore ? trendingAllowRecentlySeen : allowRecentlySeen
       );
       setTrendingNoNewVideos(data.videos.length > 0 && videos.length === 0);
       if (isLoadingMore) {
@@ -1047,6 +1095,7 @@ export default function Home() {
       }
     } catch (error) {
       if (requestGeneration === trendingRequestGenerationRef.current) {
+        if (pageToken) trendingConsumedPageTokensRef.current.delete(pageToken);
         console.error('YouTube Trending error:', error);
         setTrendingError(
           error instanceof Error
@@ -1330,15 +1379,19 @@ export default function Home() {
     ]
   );
 
+  const handleTrendingVideoDisplayed = useCallback(
+    (video: Video) => {
+      if (activeUserIdRef.current !== userId) return;
+      recordDisplayedTrendingVideos(userId, [video]);
+    },
+    [userId]
+  );
+
   useEffect(() => {
     if (!userId) return;
 
     recordDisplayedVideos(userId, filtered);
   }, [filtered, userId]);
-
-  useEffect(() => {
-    recordDisplayedTrendingVideos(userId, filteredTrending);
-  }, [filteredTrending, userId]);
 
   const allVideos = [...liveVideos, ...trendingVideos].filter(
     (video, index, list) =>
@@ -1648,8 +1701,12 @@ export default function Home() {
         {trendingError && (
           <p role="alert" className="preview-note">
             {trendingError}{' '}
-            <button className="clear" onClick={refreshTrending}>
-              Retry Trending
+            <button
+              className="clear"
+              onClick={refreshTrending}
+              disabled={trendingLoading || trendingLoadingMore}
+            >
+              {trendingLoading || trendingLoadingMore ? 'Loading…' : 'Retry Trending'}
             </button>
           </p>
         )}
@@ -1661,6 +1718,7 @@ export default function Home() {
               saved={savedIds.includes(video.id)}
               onToggleSave={toggleSave}
               onPreview={setSelectedVideo}
+              onDisplay={handleTrendingVideoDisplayed}
             />
           ))}
         </div>
@@ -1675,25 +1733,47 @@ export default function Home() {
             </button>
           </div>
         )}
-        {filteredTrending.length === 0 && !trendingLoading && !trendingError && (
+        {trendingNoNewVideos && !trendingError && (
           <div className="empty">
             <p>
-              {trendingVideos.length > 0
-                ? 'No loaded Trending videos match these filters. Load more or adjust the filters.'
-                : trendingNoNewVideos
-                  ? 'You have already seen the videos on this Trending page recently. Load more or show the chart results again.'
-                  : `YouTube returned no popular videos for Nigeria${trendingCategory !== 'All categories' ? ' in this category' : ''}.`}
+              This YouTube chart page contained no new videos. Its results were
+              recently shown or already loaded.
+              {trendingNextPageToken
+                ? ' Load more to continue through the chart.'
+                : ' There are no more chart pages to load.'}
             </p>
-            {trendingVideos.length === 0 && (
-              <button
-                className="clear"
-                onClick={trendingNoNewVideos ? showRecentTrendingVideos : refreshTrending}
-              >
-                {trendingNoNewVideos ? 'Show chart results again' : 'Try again'}
-              </button>
-            )}
+            <button
+              className="clear"
+              onClick={showRecentTrendingVideos}
+              disabled={trendingLoading || trendingLoadingMore}
+            >
+              {trendingLoading || trendingLoadingMore
+                ? 'Loading chart results…'
+                : 'Show chart results again'}
+            </button>
           </div>
         )}
+        {filteredTrending.length === 0 &&
+          !trendingLoading &&
+          !trendingError &&
+          !trendingNoNewVideos && (
+            <div className="empty">
+              <p>
+                {trendingVideos.length > 0
+                  ? 'No loaded Trending videos match these filters. Load more or adjust the filters.'
+                  : `YouTube returned no popular videos for Nigeria${trendingCategory !== 'All categories' ? ' in this category' : ''}.`}
+              </p>
+              {trendingVideos.length === 0 && (
+                <button
+                  className="clear"
+                  onClick={refreshTrending}
+                  disabled={trendingLoading || trendingLoadingMore}
+                >
+                  {trendingLoading || trendingLoadingMore ? 'Loading…' : 'Try again'}
+                </button>
+              )}
+            </div>
+          )}
       </section>
       <section className="trending" id="discover-feed">
         <div className="section-kicker"><i /> CURATED FOR DISCOVERY</div>

@@ -22,6 +22,9 @@ filters, and a persistent Watch Later list.
 - Best Match uses available video metadata and preferred/excluded topics.
   Excluded topics are penalized, not filtered out.
 - Recent Discovery and Trending history reduces repeated videos in the browser.
+  Trending history is recorded when a card is at least half visible, expires
+  after 14 days, and is capped at 100 videos per account (with a separate
+  guest history). Users can explicitly show the YouTube chart results again.
 - Supabase authentication supports signup, login, and persistent sessions.
   Onboarding and the preferences page store preferred and excluded topics.
 - Signed-in users can save and remove videos from Watch Later; saved videos
