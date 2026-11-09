@@ -56,6 +56,100 @@ type YouTubeCategoriesResponse = {
   }>;
 };
 
+const quotaErrorReasons = [
+  "quotaExceeded",
+  "dailyLimitExceeded",
+  "rateLimitExceeded",
+  "userRateLimitExceeded",
+];
+
+function isSupportedRegionItem(
+  item: unknown
+): item is { snippet: { gl: string; name: string } } {
+  if (!item || typeof item !== "object" || !("snippet" in item)) {
+    return false;
+  }
+
+  const snippet = item.snippet;
+  return Boolean(
+    snippet &&
+      typeof snippet === "object" &&
+      "gl" in snippet &&
+      typeof snippet.gl === "string" &&
+      /^[A-Z]{2}$/.test(snippet.gl) &&
+      "name" in snippet &&
+      typeof snippet.name === "string" &&
+      snippet.name.trim()
+  );
+}
+
+async function validateSupportedRegion(
+  regionCode: string,
+  apiKey: string
+): Promise<NextResponse | null> {
+  const regionsUrl = new URL(`${YOUTUBE_API_URL}/i18nRegions`);
+  regionsUrl.search = new URLSearchParams({
+    part: "snippet",
+    hl: "en_US",
+    key: apiKey,
+  }).toString();
+
+  const response = await fetch(regionsUrl, {
+    next: { revalidate: 86400 },
+  });
+
+  if (!response.ok) {
+    const errorData =
+      (await response.json().catch(() => null)) as
+        | YouTubeApiErrorResponse
+        | null;
+    const reason = errorData?.error?.errors?.[0]?.reason ?? "";
+    const quotaExceeded = quotaErrorReasons.includes(reason);
+
+    return noStoreJson(
+      {
+        error: quotaExceeded
+          ? "The YouTube API quota has been exceeded. Please try again later."
+          : "Could not verify YouTube's supported regions.",
+        errorCode: quotaExceeded
+          ? "quota_exceeded"
+          : "region_list_unavailable",
+      },
+      response.status
+    );
+  }
+
+  const regionsData = (await response.json().catch(() => null)) as
+    | { items?: unknown[] }
+    | null;
+  if (
+    !regionsData ||
+    !Array.isArray(regionsData.items) ||
+    regionsData.items.length === 0 ||
+    !regionsData.items.every(isSupportedRegionItem)
+  ) {
+    return noStoreJson(
+      {
+        error: "YouTube returned an invalid supported-region list.",
+        errorCode: "region_list_unavailable",
+      },
+      502
+    );
+  }
+
+  if (!regionsData.items.some((item) => item.snippet.gl === regionCode)) {
+    return noStoreJson(
+      {
+        error: "This region is not supported by YouTube.",
+        errorCode: "invalid_region",
+      },
+      400
+    );
+  }
+
+  return null;
+}
+
 export async function GET(request: Request) {
   let requestMode = "search";
 
@@ -73,6 +167,7 @@ export async function GET(request: Request) {
     requestMode = searchParams.get("mode") ?? "search";
     const query = searchParams.get("q")?.trim() ?? "";
     const categoryId = searchParams.get("categoryId")?.trim();
+    const requestedRegionCode = searchParams.get("regionCode");
     const pageToken = searchParams.get("pageToken")?.trim();
     const requestedMaxResults = searchParams.get("maxResults");
     const maxResults = requestedMaxResults
@@ -98,14 +193,47 @@ export async function GET(request: Request) {
     }
 
     if (requestMode === "trending") {
+      const regionCode = requestedRegionCode?.trim().toUpperCase() ?? "";
+
+      if (requestedRegionCode === null && categoryId) {
+        return noStoreJson(
+          {
+            error: "Categories are not available for YouTube default.",
+            errorCode: "category_unavailable",
+          },
+          400
+        );
+      }
+
+      if (requestedRegionCode !== null) {
+        if (!/^[A-Z]{2}$/.test(regionCode)) {
+          return noStoreJson(
+            {
+              error: "Select a valid YouTube region.",
+              errorCode: "invalid_region",
+            },
+            400
+          );
+        }
+
+        const regionValidationResponse = await validateSupportedRegion(
+          regionCode,
+          apiKey
+        );
+        if (regionValidationResponse) return regionValidationResponse;
+      }
+
       const trendingUrl = new URL(`${YOUTUBE_API_URL}/videos`);
       const trendingParams = new URLSearchParams({
         part: "snippet,contentDetails,statistics",
         chart: "mostPopular",
         maxResults: String(maxResults),
-        regionCode: "NG",
         key: apiKey,
       });
+
+      if (regionCode) {
+        trendingParams.set("regionCode", regionCode);
+      }
 
       if (categoryId) {
         trendingParams.set("videoCategoryId", categoryId);
@@ -117,16 +245,48 @@ export async function GET(request: Request) {
 
       trendingUrl.search = trendingParams.toString();
 
-      const categoriesUrl = new URL(`${YOUTUBE_API_URL}/videoCategories`);
-      categoriesUrl.search = new URLSearchParams({
-        part: "snippet",
-        regionCode: "NG",
-        key: apiKey,
-      }).toString();
+      const categoriesRequest = regionCode
+        ? (() => {
+            const categoriesUrl = new URL(
+              `${YOUTUBE_API_URL}/videoCategories`
+            );
+            categoriesUrl.search = new URLSearchParams({
+              part: "snippet",
+              regionCode,
+              key: apiKey,
+            }).toString();
+            return fetch(categoriesUrl, { next: { revalidate: 3600 } })
+              .then(async (response) => {
+                if (!response.ok) {
+                  const errorData =
+                    (await response.json().catch(() => null)) as
+                      | YouTubeApiErrorResponse
+                      | null;
+                  const reason =
+                    errorData?.error?.errors?.[0]?.reason ?? "";
+                  return {
+                    data: null,
+                    error: quotaErrorReasons.includes(reason)
+                      ? "YouTube's category quota has been exceeded."
+                      : "Could not load categories for this region.",
+                  };
+                }
+
+                return {
+                  data: (await response.json()) as YouTubeCategoriesResponse,
+                  error: "",
+                };
+              })
+              .catch(() => ({
+                data: null,
+                error: "Could not connect to YouTube to load categories.",
+              }));
+          })()
+        : Promise.resolve({ data: null, error: "" });
 
       const [trendingResponse, categoriesResponse] = await Promise.all([
         fetch(trendingUrl, { cache: "no-store" }),
-        fetch(categoriesUrl, { next: { revalidate: 3600 } }),
+        categoriesRequest,
       ]);
 
       if (!trendingResponse.ok) {
@@ -138,12 +298,7 @@ export async function GET(request: Request) {
         const errorCode =
           reason === "videoChartNotFound"
             ? "chart_unavailable"
-            : [
-                  "quotaExceeded",
-                  "dailyLimitExceeded",
-                  "rateLimitExceeded",
-                  "userRateLimitExceeded",
-                ].includes(reason)
+            : quotaErrorReasons.includes(reason)
               ? "quota_exceeded"
               : "youtube_api_error";
 
@@ -153,7 +308,9 @@ export async function GET(request: Request) {
           {
             error:
               errorCode === "chart_unavailable"
-                ? "YouTube's most-popular chart is unavailable for this region or category."
+                ? regionCode
+                  ? "YouTube's most-popular chart is unavailable for this region or category."
+                  : "YouTube's default most-popular chart is unavailable."
                 : errorCode === "quota_exceeded"
                   ? "The YouTube API quota has been exceeded. Please try again later."
                   : "Could not retrieve YouTube Trending videos.",
@@ -165,10 +322,7 @@ export async function GET(request: Request) {
 
       const trendingData =
         (await trendingResponse.json()) as YouTubeVideosResponse;
-      const categoriesData = categoriesResponse.ok
-        ? ((await categoriesResponse.json()) as YouTubeCategoriesResponse)
-        : null;
-      const categories = (categoriesData?.items ?? []).filter(
+      const categories = (categoriesResponse.data?.items ?? []).filter(
         (item) => item.snippet.assignable
       );
       const categoryNames = new Map(
@@ -200,6 +354,7 @@ export async function GET(request: Request) {
           id: item.id,
           name: item.snippet.title,
         })),
+        categoriesError: categoriesResponse.error || null,
         nextPageToken: trendingData.nextPageToken ?? null,
       });
     }
@@ -215,6 +370,23 @@ export async function GET(request: Request) {
       return noStoreJson({ error: "A search query is required." }, 400);
     }
 
+    const requestedSearchRegionCode = searchParams.get("regionCode");
+    const searchRegionCode = requestedSearchRegionCode
+      ?.trim()
+      .toUpperCase();
+    if (!searchRegionCode || !/^[A-Z]{2}$/.test(searchRegionCode)) {
+      return noStoreJson(
+        { error: "Select a valid YouTube region.", errorCode: "invalid_region" },
+        400
+      );
+    }
+
+    const regionValidationResponse = await validateSupportedRegion(
+      searchRegionCode,
+      apiKey
+    );
+    if (regionValidationResponse) return regionValidationResponse;
+
     const searchUrl = new URL(`${YOUTUBE_API_URL}/search`);
 
     const youtubeParams = new URLSearchParams({
@@ -223,7 +395,7 @@ export async function GET(request: Request) {
       maxResults: String(maxResults),
       order,
       q: query,
-      regionCode: "NG",
+      regionCode: searchRegionCode,
       key: apiKey,
     });
 
@@ -243,7 +415,7 @@ export async function GET(request: Request) {
 
     categoriesUrl.search = new URLSearchParams({
       part: "snippet",
-      regionCode: "NG",
+      regionCode: searchRegionCode,
       key: apiKey,
     }).toString();
 
@@ -367,8 +539,8 @@ export async function GET(request: Request) {
       })),
       nextPageToken: searchData.nextPageToken ?? null,
     });
-  } catch (error) {
-    console.error("YouTube API route error:", error);
+  } catch {
+    console.error("YouTube API route request failed.");
 
     return noStoreJson(
       {

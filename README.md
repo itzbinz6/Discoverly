@@ -1,8 +1,8 @@
 # Discoverly
 
 Discoverly is a YouTube video discovery app. It presents a personalized Discovery
-feed alongside a separate YouTube popularity chart for Nigeria, with search,
-filters, and a persistent Watch Later list.
+feed alongside a YouTube Trending chart, with search, filters, a shared country
+selection, and a persistent Watch Later list.
 
 ## Technology
 
@@ -15,16 +15,24 @@ filters, and a persistent Watch Later list.
 
 - Discovery searches use rotating, curated queries informed by saved topic
   preferences. Users can also search YouTube directly.
-- Trending uses YouTube's `videos.list` `mostPopular` chart with `regionCode=NG`,
-  separate category selection, refresh, and pagination.
+- Trending uses YouTube's `videos.list` `mostPopular` chart and shares a
+  searchable country selector with Discovery. Visitors must choose a supported
+  country before either feed loads; there is no automatic country default.
+  Both feeds, including refresh and pagination, request the selected country.
+- Country choices are stored in browser localStorage under
+  `discoverly:country-selection:v1:guest` for guests and
+  `discoverly:country-selection:v1:<user-id>` for signed-in accounts. Guest and
+  account selections are kept separate and are not merged on login.
+- Each feed loads its own category list for the selected country.
 - Discovery and Trending maintain independent filters, loading, errors, refresh,
   and pagination state.
 - Best Match uses available video metadata and preferred/excluded topics.
   Excluded topics are penalized, not filtered out.
 - Recent Discovery and Trending history reduces repeated videos in the browser.
   Trending history is recorded when a card is at least half visible, expires
-  after 14 days, and is capped at 100 videos per account (with a separate
-  guest history). Users can explicitly show the YouTube chart results again.
+  after 14 days, and is capped at 100 videos per account and region (with
+  separate guest histories). Users can explicitly show the YouTube chart results
+  again.
 - Supabase authentication supports signup, login, and persistent sessions.
   Onboarding and the preferences page store preferred and excluded topics.
 - Signed-in users can save and remove videos from Watch Later; saved videos
@@ -72,5 +80,6 @@ npx.cmd eslint app/page.tsx app/api/youtube/route.ts
 npm run build
 ```
 
-YouTube API availability, quota limits, and the Nigeria `mostPopular` chart
-depend on Google's live API response and the configured API key.
+YouTube API availability, quota limits, and regional `mostPopular` charts
+depend on Google's live API response and the configured API key. Both feeds use
+the selected region code, and their category lists are loaded for that country.

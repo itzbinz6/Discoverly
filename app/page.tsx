@@ -32,6 +32,7 @@ const discoveryQueries = [
   'interesting engineering projects',
 ];
 const discoveryRotationStorageKey = 'discoverly:discovery-query-index';
+const countrySelectionStorageKey = 'discoverly:country-selection:v1';
 const recentVideoHistoryStorageKey = 'discoverly:recent-videos';
 const recentTrendingHistoryStorageKey = 'discoverly:recent-trending-videos';
 const recentVideoHistoryLimit = 100;
@@ -40,25 +41,7 @@ const discoveryPageSize = 9;
 const trendingPageSize = 9;
 
 type RecentVideoEntry = { id: string; seenAt: number };
-
-const preferenceYouTubeCategoryIds: Record<string, string> = {
-  technology: '28',
-  'artificial intelligence': '28',
-  science: '28',
-  education: '27',
-  gaming: '20',
-  music: '10',
-  sports: '17',
-  'movies & tv': '24',
-  'news & politics': '25',
-  travel: '19',
-  'food & cooking': '26',
-  comedy: '23',
-  'health & fitness': '26',
-  'art & design': '26',
-  'history & culture': '27',
-  'personal development': '27',
-};
+type YouTubeRegion = { code: string; name: string };
 
 function getDiscoveryQueries(preferredTopics: string[]) {
   const topicQueries = [...new Set(
@@ -106,13 +89,8 @@ function getNextDiscoveryQuery(preferredTopics: string[], userId: string | null)
   return queryOptions[index];
 }
 
-function getPreferredTrendingCategory(preferredTopics: string[]) {
-  for (const topic of preferredTopics) {
-    const categoryId = preferenceYouTubeCategoryIds[topic.trim().toLowerCase()];
-    if (categoryId) return categoryId;
-  }
-
-  return 'All categories';
+function getCountrySelectionStorageKey(userId: string | null) {
+  return `${countrySelectionStorageKey}:${userId ?? 'guest'}`;
 }
 
 function readRecentVideoHistory(userId: string): RecentVideoEntry[] {
@@ -161,33 +139,97 @@ function filterPreviouslyDisplayedVideos(
   });
 }
 
-function getTrendingHistoryStorageKey(userId: string | null) {
-  return `${recentTrendingHistoryStorageKey}:${userId ?? 'guest'}`;
+function getTrendingHistoryStorageKey(
+  userId: string | null,
+  regionCode: string | null
+) {
+  return `${recentTrendingHistoryStorageKey}:${userId ?? 'guest'}:${regionCode ?? 'default'}`;
 }
 
-function readRecentTrendingHistory(userId: string | null): RecentVideoEntry[] {
-  try {
-    const storedHistory = window.localStorage.getItem(
-      getTrendingHistoryStorageKey(userId)
-    );
-    if (!storedHistory) return [];
+function parseRecentTrendingHistory(parsedHistory: unknown): RecentVideoEntry[] {
+  if (!Array.isArray(parsedHistory)) {
+    throw new Error('Stored recent Trending history is not an array.');
+  }
 
-    const parsedHistory: unknown = JSON.parse(storedHistory);
-    if (!Array.isArray(parsedHistory)) {
-      throw new Error('Stored recent Trending history is not an array.');
+  const cutoff = Date.now() - recentVideoHistoryMaxAge;
+  return parsedHistory
+    .filter(
+      (entry): entry is RecentVideoEntry =>
+        typeof entry?.id === 'string' &&
+        typeof entry?.seenAt === 'number' &&
+        Number.isFinite(entry.seenAt) &&
+        entry.seenAt >= cutoff
+    )
+    .sort((a, b) => b.seenAt - a.seenAt)
+    .slice(0, recentVideoHistoryLimit);
+}
+
+function migrateLegacyTrendingHistory(userId: string | null) {
+  const legacyKey = `${recentTrendingHistoryStorageKey}:${userId ?? 'guest'}`;
+
+  try {
+    const storedLegacyHistory = window.localStorage.getItem(legacyKey);
+    if (!storedLegacyHistory) return;
+
+    const legacyHistory = parseRecentTrendingHistory(
+      JSON.parse(storedLegacyHistory)
+    );
+    const nigeriaHistoryKey = getTrendingHistoryStorageKey(userId, 'NG');
+    const storedNigeriaHistory = window.localStorage.getItem(nigeriaHistoryKey);
+    let nigeriaHistory: RecentVideoEntry[] = [];
+    if (storedNigeriaHistory) {
+      try {
+        nigeriaHistory = parseRecentTrendingHistory(
+          JSON.parse(storedNigeriaHistory)
+        );
+      } catch (error) {
+        console.warn('Could not read Nigeria Trending history during migration:', error);
+      }
+    }
+    const mergedHistory = new Map<string, number>();
+    for (const entry of [...legacyHistory, ...nigeriaHistory]) {
+      mergedHistory.set(
+        entry.id,
+        Math.max(mergedHistory.get(entry.id) ?? 0, entry.seenAt)
+      );
     }
 
-    const cutoff = Date.now() - recentVideoHistoryMaxAge;
-    return parsedHistory
-      .filter(
-        (entry): entry is RecentVideoEntry =>
-          typeof entry?.id === 'string' &&
-          typeof entry?.seenAt === 'number' &&
-          Number.isFinite(entry.seenAt) &&
-          entry.seenAt >= cutoff
+    window.localStorage.setItem(
+      nigeriaHistoryKey,
+      JSON.stringify(
+        [...mergedHistory]
+          .map(([id, seenAt]) => ({ id, seenAt }))
+          .sort((a, b) => b.seenAt - a.seenAt)
+          .slice(0, recentVideoHistoryLimit)
       )
-      .sort((a, b) => b.seenAt - a.seenAt)
-      .slice(0, recentVideoHistoryLimit);
+    );
+    window.localStorage.removeItem(legacyKey);
+  } catch (error) {
+    console.warn('Could not migrate recent Trending history:', error);
+  }
+}
+
+function readRecentTrendingHistory(
+  userId: string | null,
+  regionCode: string | null
+): RecentVideoEntry[] {
+  if (regionCode === 'NG') migrateLegacyTrendingHistory(userId);
+
+  try {
+    const storedHistory = window.localStorage.getItem(
+      getTrendingHistoryStorageKey(userId, regionCode)
+    );
+    if (!storedHistory) {
+      if (regionCode !== 'NG') return [];
+      const legacyHistory = window.localStorage.getItem(
+        `${recentTrendingHistoryStorageKey}:${userId ?? 'guest'}`
+      );
+      return legacyHistory
+        ? parseRecentTrendingHistory(JSON.parse(legacyHistory))
+        : [];
+    }
+
+    return parseRecentTrendingHistory(JSON.parse(storedHistory));
   } catch (error) {
     console.warn('Could not read recent Trending history:', error);
     return [];
@@ -197,13 +239,14 @@ function readRecentTrendingHistory(userId: string | null): RecentVideoEntry[] {
 function filterRecentlyDisplayedTrendingVideos(
   items: Video[],
   userId: string | null,
+  regionCode: string | null,
   existingIds = new Set<string>(),
   allowRecentlySeen = false
 ) {
   const recentIds = new Set(
     allowRecentlySeen
       ? []
-      : readRecentTrendingHistory(userId).map((entry) => entry.id)
+      : readRecentTrendingHistory(userId, regionCode).map((entry) => entry.id)
   );
   const uniqueIds = new Set(existingIds);
 
@@ -243,13 +286,17 @@ function recordDisplayedVideos(userId: string, displayedVideos: Video[]) {
 
 function recordDisplayedTrendingVideos(
   userId: string | null,
+  regionCode: string | null,
   displayedVideos: Video[]
 ) {
   if (displayedVideos.length === 0) return;
 
   try {
     const history = new Map(
-      readRecentTrendingHistory(userId).map((entry) => [entry.id, entry.seenAt])
+      readRecentTrendingHistory(userId, regionCode).map((entry) => [
+        entry.id,
+        entry.seenAt,
+      ])
     );
     const seenAt = Date.now();
 
@@ -258,7 +305,7 @@ function recordDisplayedTrendingVideos(
     }
 
     window.localStorage.setItem(
-      getTrendingHistoryStorageKey(userId),
+      getTrendingHistoryStorageKey(userId, regionCode),
       JSON.stringify(
         [...history]
           .map(([id, timestamp]) => ({ id, seenAt: timestamp }))
@@ -343,6 +390,7 @@ type YouTubeCategory = {
 type TrendingResponse = {
   videos: YouTubeVideo[];
   categories: YouTubeCategory[];
+  categoriesError?: string | null;
   nextPageToken: string | null;
 };
 
@@ -583,6 +631,86 @@ function FeedFilterControls({
   );
 }
 
+function CountrySelector({
+  regions,
+  selectedCountryCode,
+  onChange,
+  variant,
+}: {
+  regions: YouTubeRegion[];
+  selectedCountryCode: string | null;
+  onChange: (regionCode: string) => void;
+  variant: 'navigation' | 'mobile' | 'gate';
+}) {
+  const [search, setSearch] = useState('');
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const searchId = `country-search-${variant}`;
+  const selectId = `country-select-${variant}`;
+  const selectedCountry = regions.find(
+    (region) => region.code === selectedCountryCode
+  );
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredRegions = regions.filter(
+    (region) =>
+      region.code === selectedCountryCode ||
+      !normalizedSearch ||
+      region.name.toLowerCase().includes(normalizedSearch) ||
+      region.code.toLowerCase().includes(normalizedSearch)
+  );
+
+  const controls = (
+    <div className={`country-selector-fields country-selector-${variant}`}>
+      <label htmlFor={searchId}>Search countries</label>
+      <input
+        id={searchId}
+        type="search"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="Search by name or code"
+        autoComplete="off"
+      />
+      <label htmlFor={selectId}>Country</label>
+      <select
+        id={selectId}
+        value={selectedCountryCode ?? ''}
+        onChange={(event) => {
+          if (!regions.some((region) => region.code === event.target.value)) {
+            return;
+          }
+          onChange(event.target.value);
+          if (detailsRef.current) detailsRef.current.open = false;
+        }}
+      >
+        <option value="">Choose a country</option>
+        {filteredRegions.map((region) => (
+          <option key={region.code} value={region.code}>
+            {region.name} ({region.code})
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
+  if (variant === 'navigation') {
+    return (
+      <details className="country-picker" ref={detailsRef}>
+        <summary aria-label={`Selected country: ${selectedCountry?.name ?? 'Choose a country'}`}>
+          <span>Country</span>
+          <strong>{selectedCountry?.name ?? 'Choose a country'}</strong>
+          <span aria-hidden="true">⌄</span>
+        </summary>
+        <div className="country-picker-popover">{controls}</div>
+      </details>
+    );
+  }
+
+  return (
+    <div className={`country-picker-inline country-picker-inline-${variant}`}>
+      {controls}
+    </div>
+  );
+}
+
 function Score({ value }: { value: number }) { return <div className="score-ring" aria-label={`Example match score ${value}`}><span>{value}</span></div>; }
 function VideoCard({
   video,
@@ -648,7 +776,12 @@ export default function Home() {
   const [excludedTopics, setExcludedTopics] = useState<string[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [authIdentityReady, setAuthIdentityReady] = useState(false);
   const [preferencesReady, setPreferencesReady] = useState(false);
+  const [authIdentityError, setAuthIdentityError] = useState('');
+  const [countryIdentityReady, setCountryIdentityReady] = useState(false);
+  const [countrySelectionError, setCountrySelectionError] = useState('');
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState('');
   const [savedVideosLoading, setSavedVideosLoading] = useState(false);
   const activeUserIdRef = useRef<string | null>(null);
@@ -663,11 +796,15 @@ export default function Home() {
   const [savedVideos, setSavedVideos] = useState<Video[]>([]);
   const [liveVideos, setLiveVideos] = useState<Video[]>([]);
   const [trendingVideos, setTrendingVideos] = useState<Video[]>([]);
+  const [supportedRegions, setSupportedRegions] = useState<YouTubeRegion[]>([]);
+  const [regionsLoading, setRegionsLoading] = useState(true);
+  const [regionsError, setRegionsError] = useState('');
   const [trendingCategory, setTrendingCategory] = useState('All categories');
   const [trendingDuration, setTrendingDuration] = useState('Any length');
   const [trendingDate, setTrendingDate] = useState('Any time');
   const [trendingSort, setTrendingSort] = useState('Most popular');
   const [trendingCategories, setTrendingCategories] = useState<YouTubeCategory[]>([]);
+  const [trendingCategoriesError, setTrendingCategoriesError] = useState('');
   const [trendingLoading, setTrendingLoading] = useState(false);
   const [trendingLoadingMore, setTrendingLoadingMore] = useState(false);
   const [trendingError, setTrendingError] = useState('');
@@ -683,6 +820,8 @@ export default function Home() {
   const discoveryConsumedPageTokensRef = useRef(new Set<string>());
   const initialDiscoveryStartedRef = useRef(false);
   const activeDiscoveryQueryRef = useRef('');
+  const activeCountryIdentityRef = useRef<string | null>(null);
+  const selectedCountryRef = useRef<string | null>(null);
   const trendingRequestGenerationRef = useRef(0);
   const trendingLoadingMoreLockRef = useRef(false);
   const trendingReplacementLockRef = useRef(false);
@@ -737,6 +876,61 @@ export default function Home() {
       .slice(0, 5);
   }, [query]);
 
+  const loadSupportedRegions = useCallback(async () => {
+    setRegionsLoading(true);
+    setRegionsError('');
+
+    try {
+      const response = await fetch('/api/youtube/regions', {
+        cache: 'no-store',
+      });
+      const data: unknown = await response.json();
+      if (!data || typeof data !== 'object') {
+        throw new Error('YouTube returned an invalid supported-region list.');
+      }
+      const responseData = data as { regions?: unknown; error?: unknown };
+
+      if (!response.ok) {
+        throw new Error(
+          typeof responseData.error === 'string'
+            ? responseData.error
+            : 'Could not load YouTube regions.'
+        );
+      }
+
+      if (
+        !Array.isArray(responseData.regions) ||
+        responseData.regions.length === 0 ||
+        !responseData.regions.every(
+          (region): region is YouTubeRegion =>
+            typeof region?.code === 'string' &&
+            /^[A-Z]{2}$/.test(region.code) &&
+            typeof region.name === 'string' &&
+            Boolean(region.name.trim())
+        )
+      ) {
+        throw new Error('YouTube returned an invalid supported-region list.');
+      }
+
+      setSupportedRegions(
+        [...responseData.regions].sort((a, b) => a.name.localeCompare(b.name))
+      );
+    } catch (error) {
+      console.error('Could not load YouTube regions:', error);
+      setRegionsError(
+        error instanceof Error
+          ? error.message
+          : 'Could not load YouTube regions.'
+      );
+    } finally {
+      setRegionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSupportedRegions();
+  }, [loadSupportedRegions]);
+
   useEffect(() => {
     if (!searchFocused) return;
 
@@ -771,8 +965,15 @@ export default function Home() {
       setUserId(sessionUserId);
       setUserEmail(sessionEmail);
       setAuthReady(true);
+      setAuthIdentityReady(true);
+      setAuthIdentityError('');
 
       if (accountChanged) {
+        activeCountryIdentityRef.current = null;
+        selectedCountryRef.current = null;
+        setCountryIdentityReady(false);
+        setSelectedCountryCode(null);
+        setCountrySelectionError('');
         videoRequestGenerationRef.current += 1;
         loadingMoreLockRef.current = false;
         discoveryReplacementLockRef.current = false;
@@ -800,6 +1001,8 @@ export default function Home() {
         setSaveMessage('');
         setLiveVideos([]);
         setTrendingVideos([]);
+        setTrendingCategories([]);
+        setTrendingCategoriesError('');
         setNextPageToken(null);
         setTrendingNextPageToken(null);
         setTrendingNoNewVideos(false);
@@ -919,6 +1122,8 @@ export default function Home() {
         console.error('Could not read session:', error.message);
         if (mounted) {
           setAuthReady(true);
+          setAuthIdentityReady(false);
+          setAuthIdentityError("We couldn't verify your account. Reload this page to try again.");
           setPreferencesReady(true);
         }
         return;
@@ -938,9 +1143,63 @@ export default function Home() {
     };
   }, [supabase]);
 
+  useEffect(() => {
+    if (
+      !authReady ||
+      !authIdentityReady ||
+      regionsLoading ||
+      regionsError ||
+      supportedRegions.length === 0
+    ) {
+      return;
+    }
+
+    const identity = userId ?? 'guest';
+    if (activeCountryIdentityRef.current === identity) return;
+
+    activeCountryIdentityRef.current = identity;
+    setCountryIdentityReady(false);
+    setCountrySelectionError('');
+    let restoredCountryCode: string | null = null;
+
+    try {
+      const savedCountryCode = window.localStorage.getItem(
+        getCountrySelectionStorageKey(userId)
+      );
+      if (savedCountryCode) {
+        if (
+          supportedRegions.some((region) => region.code === savedCountryCode)
+        ) {
+          restoredCountryCode = savedCountryCode;
+        } else {
+          setCountrySelectionError(
+            'Your saved country is no longer supported. Please choose a supported country.'
+          );
+        }
+      }
+    } catch (error) {
+      console.warn('Could not read the saved country selection:', error);
+      setCountrySelectionError(
+        'We could not read your saved country. Choose a country to continue.'
+      );
+    }
+
+    selectedCountryRef.current = restoredCountryCode;
+    setSelectedCountryCode(restoredCountryCode);
+    setCountryIdentityReady(true);
+  }, [
+    authIdentityReady,
+    authReady,
+    regionsError,
+    regionsLoading,
+    supportedRegions,
+    userId,
+  ]);
+
   const fetchVideos = async (
     term: string,
     selectedCategory: string,
+    regionCode: string,
     pageToken?: string,
     order: 'relevance' | 'date' = 'relevance',
     maxResults = 30
@@ -949,6 +1208,7 @@ export default function Home() {
       q: term.trim(),
       order,
       maxResults: String(maxResults),
+      regionCode,
     });
 
     if (selectedCategory !== 'All categories') {
@@ -971,6 +1231,7 @@ export default function Home() {
 
   const fetchTrendingVideos = async (
     selectedCategory: string,
+    regionCode: string,
     pageToken?: string
   ): Promise<TrendingResponse> => {
     const params = new URLSearchParams({
@@ -982,6 +1243,7 @@ export default function Home() {
       params.set('categoryId', selectedCategory);
     }
 
+    if (regionCode) params.set('regionCode', regionCode);
     if (pageToken) params.set('pageToken', pageToken);
 
     const response = await fetch(`/api/youtube?${params.toString()}`, {
@@ -1000,6 +1262,8 @@ export default function Home() {
     return {
       videos: data.videos ?? [],
       categories: data.categories ?? [],
+      categoriesError:
+        typeof data.categoriesError === 'string' ? data.categoriesError : '',
       nextPageToken: data.nextPageToken ?? null,
     };
   };
@@ -1011,6 +1275,13 @@ export default function Home() {
     allowRecentlySeen = false,
     supersede = false
   ) => {
+    const requestRegion = selectedCountryRef.current;
+    if (
+      !requestRegion ||
+      !supportedRegions.some((region) => region.code === requestRegion)
+    ) {
+      return;
+    }
     const isLoadingMore = Boolean(pageToken) && !replaceResults;
     if (isLoadingMore) {
       if (!pageToken) return;
@@ -1058,13 +1329,18 @@ export default function Home() {
     setTrendingError('');
 
     try {
-      const data = await fetchTrendingVideos(selectedCategory, pageToken);
+      const data = await fetchTrendingVideos(
+        selectedCategory,
+        requestRegion,
+        pageToken
+      );
 
       if (requestGeneration !== trendingRequestGenerationRef.current) return;
 
       const videos = filterRecentlyDisplayedTrendingVideos(
         convertYouTubeVideos(data.videos),
         activeUserIdRef.current,
+        requestRegion,
         isLoadingMore ? new Set(trendingVideos.map((video) => video.id)) : new Set(),
         isLoadingMore ? trendingAllowRecentlySeen : allowRecentlySeen
       );
@@ -1084,6 +1360,7 @@ export default function Home() {
       }
 
       setTrendingCategories(data.categories);
+      setTrendingCategoriesError(data.categoriesError ?? '');
       const nextPageToken = data.nextPageToken;
       if (nextPageToken && trendingConsumedPageTokensRef.current.has(nextPageToken)) {
         setTrendingError(
@@ -1129,6 +1406,68 @@ export default function Home() {
       false,
       true
     );
+  };
+
+  const changeSelectedCountry = (regionCode: string) => {
+    if (
+      !countryIdentityReady ||
+      !authIdentityReady ||
+      !supportedRegions.some((region) => region.code === regionCode) ||
+      activeUserIdRef.current !== userId
+    ) {
+      return;
+    }
+
+    const previousRegionCode = selectedCountryRef.current;
+    if (previousRegionCode === regionCode) return;
+
+    selectedCountryRef.current = regionCode;
+    setSelectedCountryCode(regionCode);
+    setCountrySelectionError('');
+
+    try {
+      window.localStorage.setItem(
+        getCountrySelectionStorageKey(userId),
+        regionCode
+      );
+    } catch (error) {
+      console.warn('Could not save the country selection:', error);
+      setCountrySelectionError(
+        'Your country is selected for this visit, but could not be saved for later.'
+      );
+    }
+
+    if (previousRegionCode === null) return;
+
+    videoRequestGenerationRef.current += 1;
+    loadingMoreLockRef.current = false;
+    discoveryReplacementLockRef.current = false;
+    discoveryConsumedPageTokensRef.current.clear();
+    initialDiscoveryStartedRef.current = false;
+    setLiveVideos([]);
+    setNextPageToken(null);
+    setYoutubeCategories([]);
+    setYoutubeError('');
+    setYoutubeLoading(false);
+    setLoadingMore(false);
+    setCategory('All categories');
+
+    trendingRequestGenerationRef.current += 1;
+    trendingLoadingMoreLockRef.current = false;
+    trendingReplacementLockRef.current = false;
+    trendingConsumedPageTokensRef.current.clear();
+    trendingInitialLoadStartedRef.current = false;
+    trendingCategoryRef.current = 'All categories';
+    setTrendingCategory('All categories');
+    setTrendingCategories([]);
+    setTrendingCategoriesError('');
+    setTrendingVideos([]);
+    setTrendingNextPageToken(null);
+    setTrendingNoNewVideos(false);
+    setTrendingAllowRecentlySeen(false);
+    setTrendingError('');
+    setTrendingLoading(false);
+    setTrendingLoadingMore(false);
   };
 
   const showRecentTrendingVideos = () => {
@@ -1177,6 +1516,14 @@ export default function Home() {
     discoveryQuery: string,
     supersede = false
   ) => {
+    const requestRegion = selectedCountryRef.current;
+    if (
+      !requestRegion ||
+      !supportedRegions.some((region) => region.code === requestRegion)
+    ) {
+      return;
+    }
+
     if (
       !supersede &&
       (discoveryReplacementLockRef.current || loadingMoreLockRef.current)
@@ -1202,6 +1549,7 @@ export default function Home() {
       const data = await fetchVideos(
         requestQuery,
         selectedCategory,
+        requestRegion,
         undefined,
         order,
         normalizedTerm ? 30 : discoveryPageSize
@@ -1247,6 +1595,14 @@ export default function Home() {
       discoveryReplacementLockRef.current
     ) return;
 
+    const requestRegion = selectedCountryRef.current;
+    if (
+      !requestRegion ||
+      !supportedRegions.some((region) => region.code === requestRegion)
+    ) {
+      return;
+    }
+
     if (discoveryConsumedPageTokensRef.current.has(nextPageToken)) {
       setYoutubeError('YouTube repeated a discovery page token. Refresh discoveries to continue.');
       setNextPageToken(null);
@@ -1264,6 +1620,7 @@ export default function Home() {
       const data = await fetchVideos(
         searchTerm || activeDiscoveryQueryRef.current,
         category,
+        requestRegion,
         requestPageToken,
         order,
         searchTerm ? 30 : discoveryPageSize
@@ -1313,26 +1670,52 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (!authReady || !preferencesReady || initialDiscoveryStartedRef.current) return;
+    if (
+      !authReady ||
+      !authIdentityReady ||
+      !preferencesReady ||
+      !countryIdentityReady ||
+      !selectedCountryCode ||
+      initialDiscoveryStartedRef.current
+    ) return;
 
-    initialDiscoveryStartedRef.current = true;
-    const discoveryQuery = getNextDiscoveryQuery(preferredTopics, userId);
+    const discoveryQuery =
+      activeDiscoveryQueryRef.current || getNextDiscoveryQuery(preferredTopics, userId);
     storeActiveDiscoveryQuery(discoveryQuery);
-    void performSearch('', 'All categories', discoveryQuery);
+    void performSearch(searchTerm, category, discoveryQuery);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady, preferencesReady, userId]);
+  }, [
+    authIdentityReady,
+    authReady,
+    countryIdentityReady,
+    preferencesReady,
+    selectedCountryCode,
+    userId,
+  ]);
 
   useEffect(() => {
-    if (!authReady || !preferencesReady || trendingInitialLoadStartedRef.current) return;
+    if (
+      !authReady ||
+      !authIdentityReady ||
+      !preferencesReady ||
+      !countryIdentityReady ||
+      !selectedCountryCode ||
+      trendingInitialLoadStartedRef.current
+    ) return;
 
     trendingInitialLoadStartedRef.current = true;
-    const preferredCategory = getPreferredTrendingCategory(preferredTopics);
-    trendingCategoryRef.current = preferredCategory;
-    setTrendingCategory(preferredCategory);
-    void requestTrendingVideos(preferredCategory);
-    // Initial Trending load only.
+    trendingCategoryRef.current = 'All categories';
+    setTrendingCategory('All categories');
+    void requestTrendingVideos('All categories');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady, preferencesReady, userId]);
+  }, [
+    authIdentityReady,
+    authReady,
+    countryIdentityReady,
+    preferencesReady,
+    selectedCountryCode,
+    userId,
+  ]);
 
   const handleLogout = async () => {
     const { error } = await supabase.auth.signOut();
@@ -1381,10 +1764,15 @@ export default function Home() {
 
   const handleTrendingVideoDisplayed = useCallback(
     (video: Video) => {
-      if (activeUserIdRef.current !== userId) return;
-      recordDisplayedTrendingVideos(userId, [video]);
+      if (
+        activeUserIdRef.current !== userId ||
+        selectedCountryRef.current !== selectedCountryCode
+      ) {
+        return;
+      }
+      recordDisplayedTrendingVideos(userId, selectedCountryCode, [video]);
     },
-    [userId]
+    [selectedCountryCode, userId]
   );
 
   useEffect(() => {
@@ -1515,6 +1903,92 @@ export default function Home() {
   };
   const scrollTo = (id: string) => { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); setMobileMenuOpen(false); setAccountOpen(false); };
 
+  const hasValidSelectedCountry = Boolean(
+    selectedCountryCode &&
+      supportedRegions.some((region) => region.code === selectedCountryCode)
+  );
+
+  if (
+    !authIdentityReady ||
+    regionsLoading ||
+    Boolean(regionsError) ||
+    !countryIdentityReady ||
+    !hasValidSelectedCountry
+  ) {
+    return (
+      <main className="country-gate">
+        <section className="country-gate-card" aria-labelledby="country-gate-title">
+          <div className="section-kicker"><i /> DISCOVERLY</div>
+          <h1 id="country-gate-title">Choose your country</h1>
+          <p>
+            Choose a country to load both Discovery and Trending results for
+            that region. Your choice is saved separately for this browser guest
+            or signed-in account.
+          </p>
+          {!authIdentityReady && (
+            <p role={authIdentityError ? 'alert' : 'status'} className="country-gate-message">
+              {authIdentityError || 'Checking your account…'}
+              {authIdentityError && (
+                <button
+                  type="button"
+                  className="clear"
+                  onClick={() => window.location.reload()}
+                >
+                  Reload
+                </button>
+              )}
+            </p>
+          )}
+          {authIdentityReady && regionsLoading && (
+            <p role="status" className="country-gate-message">
+              Loading YouTube-supported countries…
+            </p>
+          )}
+          {authIdentityReady && regionsError && (
+            <p role="alert" className="country-gate-message">
+              {regionsError}{' '}
+              <button
+                type="button"
+                className="clear"
+                onClick={() => void loadSupportedRegions()}
+                disabled={regionsLoading}
+              >
+                {regionsLoading ? 'Loading…' : 'Retry country list'}
+              </button>
+            </p>
+          )}
+          {authIdentityReady &&
+            !regionsLoading &&
+            !regionsError &&
+            !countryIdentityReady && (
+              <p role="status" className="country-gate-message">
+                Loading your saved country selection…
+              </p>
+            )}
+          {authIdentityReady &&
+            !regionsLoading &&
+            !regionsError &&
+            countryIdentityReady &&
+            !hasValidSelectedCountry && (
+              <>
+                {countrySelectionError && (
+                  <p role="alert" className="country-gate-message">
+                    {countrySelectionError}
+                  </p>
+                )}
+                <CountrySelector
+                  regions={supportedRegions}
+                  selectedCountryCode={null}
+                  onChange={changeSelectedCountry}
+                  variant="gate"
+                />
+              </>
+            )}
+        </section>
+      </main>
+    );
+  }
+
   return <main id="top">
     <nav className="topbar" aria-label="Main navigation">
       <a className="wordmark" href="#top">Discoverly</a>
@@ -1588,7 +2062,7 @@ export default function Home() {
           </div>
         )}
       </form>
-      <div className="nav-links"><a href="#top">Home</a><a href="#trending">Trending</a><a href="#discover-feed">Discover</a><a href="#interests">Categories</a><a href="#watch-later">Watch Later{savedIds.length > 0 ? ` (${savedIds.length})` : ''}</a>{!userEmail && <><a className="nav-auth-link" href="/auth">Log in</a><a className="nav-auth-button" href="/auth?mode=signup">Sign up</a></>}{userEmail && <div className="account-wrap"><button className="avatar" aria-label="Open account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen(v => !v)}>{userEmail.slice(0, 1).toUpperCase()}</button>{accountOpen && <div className="account-menu"><strong>Your account</strong><span>{userEmail}</span><button onClick={() => {
+      <div className="nav-links"><CountrySelector regions={supportedRegions} selectedCountryCode={selectedCountryCode} onChange={changeSelectedCountry} variant="navigation" /><a href="#top">Home</a><a href="#trending">Trending</a><a href="#discover-feed">Discover</a><a href="#interests">Categories</a><a href="#watch-later">Watch Later{savedIds.length > 0 ? ` (${savedIds.length})` : ''}</a>{!userEmail && <><a className="nav-auth-link" href="/auth">Log in</a><a className="nav-auth-button" href="/auth?mode=signup">Sign up</a></>}{userEmail && <div className="account-wrap"><button className="avatar" aria-label="Open account menu" aria-expanded={accountOpen} onClick={() => setAccountOpen(v => !v)}>{userEmail.slice(0, 1).toUpperCase()}</button>{accountOpen && <div className="account-menu"><strong>Your account</strong><span>{userEmail}</span><button onClick={() => {
   setAccountOpen(false);
   window.location.assign('/preferences');
 }}>
@@ -1597,6 +2071,15 @@ export default function Home() {
       <button className="mobile-menu-toggle" aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(v => !v)}>{mobileMenuOpen ? '×' : '☰'}</button>
       {mobileMenuOpen && (
   <div className="mobile-menu">
+    <CountrySelector
+      regions={supportedRegions}
+      selectedCountryCode={selectedCountryCode}
+      onChange={(regionCode) => {
+        changeSelectedCountry(regionCode);
+        setMobileMenuOpen(false);
+      }}
+      variant="mobile"
+    />
     <button onClick={() => scrollTo("top")}>Home</button>
     <button onClick={() => scrollTo("trending")}>Trending</button>
     <button onClick={() => scrollTo("discover-feed")}>Discover</button>
@@ -1648,10 +2131,18 @@ export default function Home() {
   </div>
 )}
     </nav>
+    {countrySelectionError && (
+      <p role="status" className="preview-note country-persistence-note">
+        {countrySelectionError}
+      </p>
+    )}
     <div className="page-wrap">
       <section className="hero"><div className="hero-copy"><div className="hero-kicker"><i/> CURATED FOR YOUR CURIOSITY</div><h1>Find your next favorite<br className="desktop-break"/> video</h1><p>Discover thoughtful stories, fresh ideas, and the videos worth making time for.</p><button className="compass" aria-label="Explore videos" title="Explore videos" onClick={() => scrollTo('trending')}>⊙</button></div><div className="hero-orb" aria-hidden="true"><div className="orb-core"/></div></section>
       <section className="trending" id="trending">
-        <div className="section-kicker"><i /> POPULAR ON YOUTUBE IN NIGERIA</div>
+        <div className="section-kicker">
+          <i /> POPULAR ON YOUTUBE IN{' '}
+          {supportedRegions.find((region) => region.code === selectedCountryCode)?.name.toUpperCase() ?? selectedCountryCode}
+        </div>
         <div className="section-head results-head">
           <h2>Trending now</h2>
           <span className="result-count">
@@ -1690,12 +2181,24 @@ export default function Home() {
           onDateChange={setTrendingDate}
           onSortChange={setTrendingSort}
         />
+        {trendingCategoriesError && (
+          <p role="alert" className="preview-note">
+            {trendingCategoriesError} The chart can still be viewed; retry
+            Trending to load categories again.
+          </p>
+        )}
         <p className="preview-note">
           Filters apply to loaded videos. “Most popular” preserves YouTube’s chart order; “Best match” ranks by video metadata and your topics.
+          {selectedCountryCode
+            ? ' Categories are specific to the selected region.'
+            : ''}
         </p>
         {trendingLoading && trendingVideos.length === 0 && (
           <p role="status" className="preview-note">
-            Loading popular YouTube videos for Nigeria…
+            Loading popular YouTube videos for{' '}
+            {supportedRegions.find((region) => region.code === selectedCountryCode)
+              ?.name ?? selectedCountryCode}
+            …
           </p>
         )}
         {trendingError && (
@@ -1713,7 +2216,7 @@ export default function Home() {
         <div className="video-grid">
           {filteredTrending.map((video) => (
             <VideoCard
-              key={video.id}
+              key={`${selectedCountryCode}:${video.id}`}
               video={video}
               saved={savedIds.includes(video.id)}
               onToggleSave={toggleSave}
@@ -1761,7 +2264,7 @@ export default function Home() {
               <p>
                 {trendingVideos.length > 0
                   ? 'No loaded Trending videos match these filters. Load more or adjust the filters.'
-                  : `YouTube returned no popular videos for Nigeria${trendingCategory !== 'All categories' ? ' in this category' : ''}.`}
+                  : `YouTube returned no popular videos for ${supportedRegions.find((region) => region.code === selectedCountryCode)?.name ?? selectedCountryCode}${trendingCategory !== 'All categories' ? ' in this category' : ''}.`}
               </p>
               {trendingVideos.length === 0 && (
                 <button
