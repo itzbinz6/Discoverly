@@ -23,16 +23,21 @@ selection, and a persistent Watch Later list.
   `discoverly:country-selection:v1:guest` for guests and
   `discoverly:country-selection:v1:<user-id>` for signed-in accounts. Guest and
   account selections are kept separate and are not merged on login.
-- Each feed loads its own category list for the selected country.
+- Discovery and Trending share one category list loaded for the selected
+  country, while keeping their selected categories independent.
 - Discovery and Trending maintain independent filters, loading, errors, refresh,
   and pagination state.
 - Best Match uses available video metadata and preferred/excluded topics.
   Excluded topics are penalized, not filtered out.
-- Recent Discovery and Trending history reduces repeated videos in the browser.
-  Trending history is recorded when a card is at least half visible, expires
-  after 14 days, and is capped at 100 videos per account and region (with
-  separate guest histories). Users can explicitly show the YouTube chart results
-  again.
+- Discovery, Trending, and manual searches share one recent-video history,
+  stored under `discoverly:recent-videos:v2:<user-id-or-guest>`. Guest and
+  account histories are isolated and are not merged when signing in. Videos are
+  recorded only after a card is at least 50% visible. History expires after 14
+  days and is capped at 100 IDs. Existing Discovery and Trending history keys
+  are merged into the canonical key before being removed.
+- When history filtering leaves fewer than nine candidates, a feed can request
+  up to two additional pages for that load or pagination action. Users can
+  explicitly show the YouTube chart results again.
 - Supabase authentication supports signup, login, and persistent sessions.
   Onboarding and the preferences page store preferred and excluded topics.
 - Signed-in users can save and remove videos from Watch Later; saved videos
@@ -76,10 +81,11 @@ selection, and a persistent Watch Later list.
 
 ```sh
 npx.cmd tsc --noEmit
-npx.cmd eslint app/page.tsx app/api/youtube/route.ts
+npx.cmd eslint app/page.tsx app/api/youtube/route.ts app/api/youtube/categories/route.ts lib/youtube-region.ts
 npm run build
 ```
 
 YouTube API availability, quota limits, and regional `mostPopular` charts
 depend on Google's live API response and the configured API key. Both feeds use
-the selected region code, and their category lists are loaded for that country.
+the selected region code, and the shared category list is loaded for that
+country.
