@@ -1,9 +1,6 @@
 
 import { NextResponse } from "next/server";
-import {
-  quotaErrorReasons,
-  validateSupportedRegion,
-} from "../../../lib/youtube-region";
+import { validateSupportedRegion } from "../../../lib/youtube-region";
 
 const YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3";
 
@@ -36,7 +33,11 @@ type YouTubeVideo = {
     };
   };
   contentDetails: { duration: string };
-  statistics?: { viewCount?: string };
+  statistics?: {
+    viewCount?: string;
+    likeCount?: string;
+    commentCount?: string;
+  };
 };
 
 type YouTubeVideosResponse = {
@@ -44,15 +45,7 @@ type YouTubeVideosResponse = {
   items?: YouTubeVideo[];
 };
 
-type YouTubeApiErrorResponse = {
-  error?: {
-    errors?: Array<{ reason?: string }>;
-  };
-};
-
 export async function GET(request: Request) {
-  let requestMode = "search";
-
   try {
     const apiKey = process.env.YOUTUBE_API_KEY;
 
@@ -62,9 +55,7 @@ export async function GET(request: Request) {
         500
       );
     }
-
     const { searchParams } = new URL(request.url);
-    requestMode = searchParams.get("mode") ?? "search";
     const query = searchParams.get("q")?.trim() ?? "";
     const categoryId = searchParams.get("categoryId")?.trim();
     const requestedRegionCode = searchParams.get("regionCode");
@@ -72,13 +63,7 @@ export async function GET(request: Request) {
     const requestedMaxResults = searchParams.get("maxResults");
     const maxResults = requestedMaxResults
       ? Number(requestedMaxResults)
-      : requestMode === "trending"
-        ? 9
-        : 30;
-
-    if (requestMode !== "search" && requestMode !== "trending") {
-      return noStoreJson({ error: "Invalid YouTube request mode." }, 400);
-    }
+      : 9;
 
     const regionCode = requestedRegionCode?.trim().toUpperCase() ?? "";
     if (!/^[A-Z]{2}$/.test(regionCode)) {
@@ -100,107 +85,16 @@ export async function GET(request: Request) {
       return noStoreJson({ error: "Invalid YouTube category ID." }, 400);
     }
 
-    if (requestMode === "trending") {
-      const regionValidationError = await validateSupportedRegion(
-        regionCode,
-        apiKey
-      );
-      if (regionValidationError) {
-        return noStoreJson(
-          {
-            error: regionValidationError.error,
-            errorCode: regionValidationError.errorCode,
-          },
-          regionValidationError.status
-        );
-      }
-
-      const trendingUrl = new URL(`${YOUTUBE_API_URL}/videos`);
-      const trendingParams = new URLSearchParams({
-        part: "snippet,contentDetails,statistics",
-        chart: "mostPopular",
-        maxResults: String(maxResults),
-        key: apiKey,
-      });
-
-      trendingParams.set("regionCode", regionCode);
-
-      if (categoryId) {
-        trendingParams.set("videoCategoryId", categoryId);
-      }
-
-      if (pageToken) {
-        trendingParams.set("pageToken", pageToken);
-      }
-
-      trendingUrl.search = trendingParams.toString();
-
-      const trendingResponse = await fetch(trendingUrl, {
-        cache: "no-store",
-      });
-
-      if (!trendingResponse.ok) {
-        const errorData =
-          (await trendingResponse.json().catch(() => null)) as
-            | YouTubeApiErrorResponse
-            | null;
-        const reason = errorData?.error?.errors?.[0]?.reason ?? "";
-        const errorCode =
-          reason === "videoChartNotFound"
-            ? "chart_unavailable"
-            : quotaErrorReasons.includes(reason)
-              ? "quota_exceeded"
-              : "youtube_api_error";
-
-        console.error("YouTube Trending error:", errorData ?? trendingResponse.statusText);
-
-        return noStoreJson(
-          {
-            error:
-              errorCode === "chart_unavailable"
-                ? regionCode
-                  ? "YouTube's most-popular chart is unavailable for this region or category."
-                  : "YouTube's default most-popular chart is unavailable."
-                : errorCode === "quota_exceeded"
-                  ? "The YouTube API quota has been exceeded. Please try again later."
-                  : "Could not retrieve YouTube Trending videos.",
-            errorCode,
-          },
-          trendingResponse.status
-        );
-      }
-
-      const trendingData =
-        (await trendingResponse.json()) as YouTubeVideosResponse;
-
-      const videos = (trendingData.items ?? []).map((video) => ({
-        id: video.id,
-        title: video.snippet.title,
-        description: video.snippet.description ?? "",
-        creator: video.snippet.channelTitle,
-        thumbnail:
-          video.snippet.thumbnails?.high?.url ??
-          video.snippet.thumbnails?.medium?.url ??
-          video.snippet.thumbnails?.default?.url ??
-          "",
-        views: Number(video.statistics?.viewCount ?? 0),
-        publishedAt: video.snippet.publishedAt,
-        duration: video.contentDetails.duration,
-        categoryId: video.snippet.categoryId ?? "",
-        category: "Other",
-        videoUrl: `https://www.youtube.com/watch?v=${video.id}`,
-      }));
-
-      return noStoreJson({
-        videos,
-        nextPageToken: trendingData.nextPageToken ?? null,
-      });
-    }
-
     const requestedOrder = searchParams.get("order");
-    const order = requestedOrder === "date" ? "date" : "relevance";
+    const order =
+      requestedOrder === "date" || requestedOrder === "viewCount"
+        ? requestedOrder
+        : "relevance";
 
-    if (requestedOrder && !["date", "relevance"].includes(requestedOrder)) {
+    if (
+      requestedOrder &&
+      !["date", "relevance", "viewCount"].includes(requestedOrder)
+    ) {
       return noStoreJson({ error: "Invalid YouTube search order." }, 400);
     }
 
@@ -315,6 +209,14 @@ export async function GET(request: Request) {
           video.snippet.thumbnails?.default?.url ??
           "",
         views: Number(video.statistics?.viewCount ?? 0),
+        likes:
+          video.statistics?.likeCount === undefined
+            ? undefined
+            : Number(video.statistics.likeCount),
+        comments:
+          video.statistics?.commentCount === undefined
+            ? undefined
+            : Number(video.statistics.commentCount),
         publishedAt: video.snippet.publishedAt,
         duration: video.contentDetails.duration,
         categoryId: video.snippet.categoryId ?? "",
@@ -327,17 +229,11 @@ export async function GET(request: Request) {
       videos,
       nextPageToken: searchData.nextPageToken ?? null,
     });
-  } catch {
-    console.error("YouTube API route request failed.");
+  } catch (error) {
+    console.error("YouTube API route request failed:", error);
 
     return noStoreJson(
-      {
-        error:
-          requestMode === "trending"
-            ? "Could not connect to YouTube Trending. Please check your connection and retry."
-            : "Something went wrong while fetching videos.",
-        ...(requestMode === "trending" ? { errorCode: "network_error" } : {}),
-      },
+      { error: "Could not connect to YouTube. Please check your connection and retry." },
       500
     );
   }

@@ -11,6 +11,9 @@ type Video = {
   description?: string;
   creator: string;
   views: string;
+  viewCount?: number;
+  likeCount?: number;
+  commentCount?: number;
   age: string;
   duration: string;
   score: number;
@@ -31,7 +34,26 @@ const discoveryQueries = [
   'artificial intelligence explained',
   'interesting engineering projects',
 ];
+const trendingCategoryQueries = [
+  'music videos',
+  'sports highlights',
+  'gaming',
+  'news',
+  'comedy',
+  'food',
+  'travel',
+  'education',
+  'science',
+  'fashion',
+  'movies',
+  'health',
+  'diy',
+  'animation',
+  'pets',
+  'business',
+];
 const discoveryRotationStorageKey = 'discoverly:discovery-query-index';
+const trendingQueryRotationStorageKey = 'discoverly:trending-query-index';
 const countrySelectionStorageKey = 'discoverly:country-selection:v1';
 const recentVideoHistoryStorageKey = 'discoverly:recent-videos:v2';
 const legacyRecentVideoHistoryStorageKey = 'discoverly:recent-videos';
@@ -39,7 +61,9 @@ const recentTrendingHistoryStorageKey = 'discoverly:recent-trending-videos';
 const recentVideoHistoryLimit = 100;
 const recentVideoHistoryMaxAge = 14 * 24 * 60 * 60 * 1000;
 const discoveryPageSize = 9;
-const trendingPageSize = 9;
+const trendingPageSize = 3;
+const trendingCandidatePageSize = 9;
+const trendingCandidateQueryLimit = 6;
 const candidateRefillLimit = 2;
 const recentHistoryMigrationComplete = new Set<string>();
 const recentVideoHistoryCache = new Map<string, RecentVideoEntry[]>();
@@ -103,6 +127,53 @@ function getNextDiscoveryQuery(preferredTopics: string[], userId: string | null)
   }
 
   return queryOptions[index];
+}
+
+function getTrendingCandidateQueries(
+  userId: string | null
+) {
+  const rotationKey = `${trendingQueryRotationStorageKey}:${userId ?? 'guest'}`;
+  let startIndex = 0;
+
+  try {
+    const storedIndex = window.localStorage.getItem(rotationKey);
+    if (storedIndex !== null) {
+      const parsedIndex = Number(storedIndex);
+      if (
+        Number.isInteger(parsedIndex) &&
+        parsedIndex >= 0 &&
+        parsedIndex < trendingCategoryQueries.length
+      ) {
+        startIndex = parsedIndex;
+      }
+    }
+  } catch (error) {
+    console.warn('Could not read the Trending query rotation:', error);
+  }
+
+  try {
+    window.localStorage.setItem(
+      rotationKey,
+      String((startIndex + 4) % trendingCategoryQueries.length)
+    );
+  } catch (error) {
+    console.warn('Could not save the Trending query rotation:', error);
+  }
+
+  const categoryQueries = Array.from(
+    { length: trendingCandidateQueryLimit - 2 },
+    (_, offset) => ({
+      query: trendingCategoryQueries[
+        (startIndex + offset) % trendingCategoryQueries.length
+      ],
+      order: offset === 1 ? 'date' as const : 'viewCount' as const,
+    })
+  );
+  return [
+    { query: 'popular videos', order: 'viewCount' as const },
+    { query: 'viral videos', order: 'viewCount' as const },
+    ...categoryQueries,
+  ];
 }
 
 function getCountrySelectionStorageKey(userId: string | null) {
@@ -305,12 +376,9 @@ function readRecentVideoHistory(
 function filterRecentVideos(
   items: Video[],
   userId: string | null,
-  existingIds = new Set<string>(),
-  allowRecentlySeen = false
+  existingIds = new Set<string>()
 ) {
-  const recentHistory = allowRecentlySeen
-    ? []
-    : readRecentVideoHistory(userId);
+  const recentHistory = readRecentVideoHistory(userId);
   if (recentHistory === null) {
     throw new RecentVideoHistoryUnavailableError();
   }
@@ -426,6 +494,8 @@ type YouTubeVideo = {
   creator: string;
   thumbnail: string;
   views: number;
+  likes?: number;
+  comments?: number;
   publishedAt: string;
   duration: string;
   videoUrl: string;
@@ -433,16 +503,10 @@ type YouTubeVideo = {
   categoryId: string;
 };
 
-type TrendingResponse = {
-  videos: YouTubeVideo[];
-  nextPageToken: string | null;
-};
-
 type CandidateCollection = {
   videos: Video[];
   nextPageToken: string | null;
   repeatedPageToken: boolean;
-  receivedVideoCount: number;
   refillFailed: boolean;
   refillError?: unknown;
 };
@@ -462,6 +526,9 @@ const convertYouTubeVideos = (
     description: item.description,
     creator: item.creator,
     views: formatYouTubeViews(item.views),
+    viewCount: item.views,
+    likeCount: item.likes,
+    commentCount: item.comments,
     age: formatYouTubeAge(item.publishedAt),
     duration: formatYouTubeDuration(item.duration),
     score: 0,
@@ -481,7 +548,6 @@ async function collectCandidateVideos(
     consumedPageTokens,
     fetchPage,
     isCurrent,
-    allowRecentlySeen,
   }: {
     userId: string | null;
     categories: YouTubeCategory[];
@@ -489,7 +555,6 @@ async function collectCandidateVideos(
     consumedPageTokens: Set<string>;
     fetchPage: (pageToken: string) => Promise<CandidatePage>;
     isCurrent: () => boolean;
-    allowRecentlySeen: boolean;
   }
 ): Promise<CandidateCollection | null> {
   const candidateVideos = new Map<string, YouTubeVideo>();
@@ -506,8 +571,7 @@ async function collectCandidateVideos(
     filterRecentVideos(
       convertYouTubeVideos([...candidateVideos.values()], categories),
       userId,
-      existingIds,
-      allowRecentlySeen
+      existingIds
     );
 
   let nextPageToken = firstPage.nextPageToken;
@@ -517,7 +581,7 @@ async function collectCandidateVideos(
   let refillError: unknown;
 
   while (
-    getEligibleVideos().length < 9 &&
+    getEligibleVideos().length < discoveryPageSize &&
     nextPageToken &&
     additionalRequests < candidateRefillLimit
   ) {
@@ -554,7 +618,6 @@ async function collectCandidateVideos(
     nextPageToken,
     repeatedPageToken,
     refillFailed,
-    receivedVideoCount: candidateVideos.size,
     ...(refillFailed ? { refillError } : {}),
   };
 }
@@ -579,7 +642,6 @@ type VideoFilters = {
   sort: string;
   preferredTopics: string[];
   excludedTopics: string[];
-  preservePopularityOrder?: boolean;
 };
 
 function normalizeForMatching(value: string) {
@@ -625,6 +687,100 @@ function getVideoRelevanceScore(
   return preferredEvidence - excludedEvidence;
 }
 
+function parseViewCount(value: string) {
+  const match = value.match(/([\d,.]+)\s*([KMB])?/i);
+  if (!match) return 0;
+  const multipliers: Record<string, number> = {
+    K: 1e3,
+    M: 1e6,
+    B: 1e9,
+  };
+  return Number(match[1].replace(/,/g, '')) *
+    (multipliers[(match[2] ?? '').toUpperCase()] ?? 1);
+}
+
+function rankTrendingVideos(
+  videos: Video[],
+  preferredTopics: string[],
+  excludedTopics: string[]
+) {
+  const relevanceScores = videos.map((video) =>
+    getVideoRelevanceScore(video, preferredTopics, excludedTopics)
+  );
+  const minimumRelevance = Math.min(...relevanceScores);
+  const maximumRelevance = Math.max(...relevanceScores);
+  const now = Date.now();
+  const popularityMetrics = videos.map((video) => {
+    const publishedAt = video.publishedAt ? Date.parse(video.publishedAt) : NaN;
+    const daysSincePublished = Number.isFinite(publishedAt)
+      ? Math.max(1, (now - publishedAt) / 86400000)
+      : Math.max(1, ageDays(video.age));
+    const views = video.viewCount ?? 0;
+
+    return [
+      views,
+      views / daysSincePublished,
+      video.likeCount,
+      video.commentCount,
+      views > 0 && (video.likeCount !== undefined || video.commentCount !== undefined)
+        ? ((video.likeCount ?? 0) + (video.commentCount ?? 0)) / views
+        : undefined,
+    ];
+  });
+  const metricPercentiles = popularityMetrics[0]?.map((_, metricIndex) => {
+    const availableValues = popularityMetrics
+      .map((metrics) => metrics[metricIndex])
+      .filter((value): value is number => value !== undefined);
+    return popularityMetrics.map((metrics) => {
+      const value = metrics[metricIndex];
+      if (value === undefined) return undefined;
+      const lowerCount = availableValues.filter(
+        (candidate) => candidate < value
+      ).length;
+      const equalCount = availableValues.filter(
+        (candidate) => candidate === value
+      ).length;
+      return availableValues.length < 2
+        ? 0.5
+        : (lowerCount + (equalCount - 1) / 2) / (availableValues.length - 1);
+    });
+  }) ?? [];
+
+  return videos
+    .map((video, index) => {
+      const relevance =
+        maximumRelevance === minimumRelevance
+          ? 0.5
+          : (relevanceScores[index] - minimumRelevance) /
+            (maximumRelevance - minimumRelevance);
+      const publishedAt = video.publishedAt
+        ? Date.parse(video.publishedAt)
+        : NaN;
+      const daysSincePublished = Number.isFinite(publishedAt)
+        ? Math.max(0, (now - publishedAt) / 86400000)
+        : ageDays(video.age);
+      const availableMetricScores = metricPercentiles
+        .map((scores) => scores[index])
+        .filter((score): score is number => score !== undefined);
+      const popularity = availableMetricScores.length
+        ? availableMetricScores.reduce((total, score) => total + score, 0) /
+          availableMetricScores.length
+        : 0;
+      // A 30-day half-life rewards recent uploads without making recency the lead signal.
+      const freshness = 2 ** (-daysSincePublished / 30);
+
+      return {
+        video,
+        // Popularity dominates (75%); freshness is material but secondary (20%),
+        // and personal relevance is a small tie-breaker (5%).
+        score: popularity * 0.75 + freshness * 0.2 + relevance * 0.05,
+        index,
+      };
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(({ video }) => video);
+}
+
 function filterAndSortVideos(videos: Video[], filters: VideoFilters) {
   const { category, duration, date, sort, preferredTopics, excludedTopics } = filters;
   const list = videos.filter((video) => {
@@ -656,19 +812,8 @@ function filterAndSortVideos(videos: Video[], filters: VideoFilters) {
       const bDate = b.publishedAt ? Date.parse(b.publishedAt) : 0;
       return bDate - aDate;
     });
-  } else if (sort === 'Most popular' && !filters.preservePopularityOrder) {
-    const parseViews = (value: string) => {
-      const match = value.match(/([\d,.]+)\s*([KMB])?/i);
-      if (!match) return 0;
-      const multipliers: Record<string, number> = {
-        K: 1e3,
-        M: 1e6,
-        B: 1e9,
-      };
-      const multiplier = multipliers[(match[2] ?? '').toUpperCase()] ?? 1;
-      return Number(match[1].replace(/,/g, '')) * multiplier;
-    };
-    list.sort((a, b) => parseViews(b.views) - parseViews(a.views));
+  } else if (sort === 'Most popular') {
+    list.sort((a, b) => parseViewCount(b.views) - parseViewCount(a.views));
   } else if (sort === 'Best match') {
     list.sort(
       (a, b) =>
@@ -976,19 +1121,12 @@ export default function Home() {
   const [supportedRegions, setSupportedRegions] = useState<YouTubeRegion[]>([]);
   const [regionsLoading, setRegionsLoading] = useState(true);
   const [regionsError, setRegionsError] = useState('');
-  const [trendingCategory, setTrendingCategory] = useState('All categories');
-  const [trendingDuration, setTrendingDuration] = useState('Any length');
-  const [trendingDate, setTrendingDate] = useState('Any time');
-  const [trendingSort, setTrendingSort] = useState('Most popular');
   const [countryCategories, setCountryCategories] = useState<YouTubeCategory[]>([]);
   const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [categoriesError, setCategoriesError] = useState('');
   const [trendingLoading, setTrendingLoading] = useState(false);
   const [trendingLoadingMore, setTrendingLoadingMore] = useState(false);
   const [trendingError, setTrendingError] = useState('');
-  const [trendingNoNewVideos, setTrendingNoNewVideos] = useState(false);
-  const [trendingAllowRecentlySeen, setTrendingAllowRecentlySeen] = useState(false);
-  const [trendingNextPageToken, setTrendingNextPageToken] = useState<string | null>(null);
   const [activeDiscoveryQuery, setActiveDiscoveryQuery] = useState('');
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1003,9 +1141,7 @@ export default function Home() {
   const trendingRequestGenerationRef = useRef(0);
   const trendingLoadingMoreLockRef = useRef(false);
   const trendingReplacementLockRef = useRef(false);
-  const trendingConsumedPageTokensRef = useRef(new Set<string>());
   const trendingInitialLoadStartedRef = useRef(false);
-  const trendingCategoryRef = useRef('All categories');
   const [searchTerm, setSearchTerm] = useState('');
   const categoriesRequestGenerationRef = useRef(0);
   const [discoveryDisplayGeneration, setDiscoveryDisplayGeneration] = useState(0);
@@ -1243,16 +1379,10 @@ export default function Home() {
         setTrendingDisplayGeneration(trendingRequestGenerationRef.current);
         trendingLoadingMoreLockRef.current = false;
         trendingReplacementLockRef.current = false;
-        trendingConsumedPageTokensRef.current.clear();
         initialDiscoveryStartedRef.current = false;
         trendingInitialLoadStartedRef.current = false;
         activeDiscoveryQueryRef.current = '';
-        trendingCategoryRef.current = 'All categories';
         setActiveDiscoveryQuery('');
-        setTrendingCategory('All categories');
-        setTrendingDuration('Any length');
-        setTrendingDate('Any time');
-        setTrendingSort('Most popular');
         setCategory('All categories');
         setDuration('Any length');
         setDate('Any time');
@@ -1264,9 +1394,6 @@ export default function Home() {
         setLiveVideos([]);
         setTrendingVideos([]);
         setNextPageToken(null);
-        setTrendingNextPageToken(null);
-        setTrendingNoNewVideos(false);
-        setTrendingAllowRecentlySeen(false);
         setYoutubeLoading(false);
         setDiscoveryDisplayGeneration(videoRequestGenerationRef.current);
         setTrendingLoading(false);
@@ -1462,8 +1589,8 @@ export default function Home() {
     selectedCategory: string,
     regionCode: string,
     pageToken?: string,
-    order: 'relevance' | 'date' = 'relevance',
-    maxResults = 30
+    order: 'relevance' | 'date' | 'viewCount' = 'relevance',
+    maxResults = discoveryPageSize
   ): Promise<CandidatePage> => {
     const params = new URLSearchParams({
       q: term.trim(),
@@ -1497,48 +1624,8 @@ export default function Home() {
     };
   };
 
-  const fetchTrendingVideos = async (
-    selectedCategory: string,
-    regionCode: string,
-    pageToken?: string
-  ): Promise<TrendingResponse> => {
-    const params = new URLSearchParams({
-      mode: 'trending',
-      maxResults: String(trendingPageSize),
-      regionCode,
-    });
-
-    if (selectedCategory !== 'All categories') {
-      params.set('categoryId', selectedCategory);
-    }
-
-    if (pageToken) params.set('pageToken', pageToken);
-
-    const response = await fetch(`/api/youtube?${params.toString()}`, {
-      cache: 'no-store',
-    });
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        typeof data?.error === 'string'
-          ? data.error
-          : 'Could not load YouTube Trending videos.'
-      );
-    }
-
-    return {
-      videos: data.videos ?? [],
-      nextPageToken: data.nextPageToken ?? null,
-    };
-  };
-
   const requestTrendingVideos = async (
-    selectedCategory: string,
-    pageToken?: string,
-    replaceResults = false,
-    allowRecentlySeen = false,
-    supersede = false
+    appendResults = false
   ) => {
     const requestRegion = selectedCountryRef.current;
     const requestUserId = activeUserIdRef.current;
@@ -1549,131 +1636,156 @@ export default function Home() {
     ) {
       return;
     }
-    const isLoadingMore = Boolean(pageToken) && !replaceResults;
-    if (isLoadingMore) {
-      if (!pageToken) return;
+
+    if (appendResults) {
       if (
         trendingLoadingMoreLockRef.current ||
         trendingReplacementLockRef.current
       ) {
         return;
       }
-      if (trendingConsumedPageTokensRef.current.has(pageToken)) {
-        setTrendingError(
-          'This Trending page was already requested. Refresh the chart to continue.'
-        );
-        return;
-      }
-      trendingConsumedPageTokensRef.current.add(pageToken);
     } else {
-      if (
-        !supersede &&
-        (trendingReplacementLockRef.current ||
-          trendingLoadingMoreLockRef.current)
-      ) {
-        return;
-      }
+      if (trendingReplacementLockRef.current ||
+        trendingLoadingMoreLockRef.current) return;
       trendingReplacementLockRef.current = true;
-      trendingLoadingMoreLockRef.current = false;
-      setTrendingLoadingMore(false);
     }
 
-    if (isLoadingMore) {
+    if (appendResults) {
       trendingLoadingMoreLockRef.current = true;
       setTrendingLoadingMore(true);
     } else {
       trendingRequestGenerationRef.current += 1;
       setTrendingDisplayGeneration(trendingRequestGenerationRef.current);
       setTrendingLoading(true);
-      setTrendingVideos([]);
-      setTrendingNextPageToken(null);
-      if (!allowRecentlySeen) setTrendingNoNewVideos(false);
-      setTrendingAllowRecentlySeen(allowRecentlySeen);
-      if (!pageToken) trendingConsumedPageTokensRef.current.clear();
     }
 
-    if (isLoadingMore) setTrendingNoNewVideos(false);
     const requestGeneration = trendingRequestGenerationRef.current;
     setTrendingError('');
 
     try {
-      const firstPage = await fetchTrendingVideos(
-        selectedCategory,
-        requestRegion,
-        pageToken
-      );
+      const queries = getTrendingCandidateQueries(requestUserId);
+      const candidates = new Map<string, YouTubeVideo>();
+      const displayedIds = new Set(trendingVideos.map((video) => video.id));
+      const requestedQueries = new Set<string>();
+      const failedRequests: unknown[] = [];
+
+      for (const { query, order } of queries) {
+        const requestKey = `${query}:${order}`;
+        if (requestedQueries.has(requestKey)) continue;
+        if (
+          requestGeneration !== trendingRequestGenerationRef.current ||
+          activeUserIdRef.current !== requestUserId ||
+          selectedCountryRef.current !== requestRegion
+        ) {
+          return;
+        }
+
+        requestedQueries.add(requestKey);
+        try {
+          const page = await fetchVideos(
+            query,
+            'All categories',
+            requestRegion,
+            undefined,
+            order,
+            trendingCandidatePageSize
+          );
+          if (
+            requestGeneration !== trendingRequestGenerationRef.current ||
+            activeUserIdRef.current !== requestUserId ||
+            selectedCountryRef.current !== requestRegion
+          ) {
+            return;
+          }
+
+          for (const video of page.videos) {
+            if (!displayedIds.has(video.id) && !candidates.has(video.id)) {
+              candidates.set(video.id, video);
+            }
+          }
+        } catch (error) {
+          console.error(`Trending candidate query failed (${query}):`, error);
+          failedRequests.push(error);
+        }
+
+        const eligibleVideos = filterRecentVideos(
+          convertYouTubeVideos([...candidates.values()], countryCategories),
+          requestUserId,
+          displayedIds
+        );
+        if (
+          requestedQueries.size >= 4 &&
+          eligibleVideos.length >= trendingPageSize
+        ) {
+          break;
+        }
+      }
 
       if (
         requestGeneration !== trendingRequestGenerationRef.current ||
-        activeUserIdRef.current !== requestUserId
+        activeUserIdRef.current !== requestUserId ||
+        selectedCountryRef.current !== requestRegion
       ) {
         return;
       }
 
-      const collection = await collectCandidateVideos(firstPage, {
-        userId: requestUserId,
-        categories: countryCategories,
-        existingIds: isLoadingMore
-          ? new Set(trendingVideos.map((video) => video.id))
-          : new Set<string>(),
-        consumedPageTokens: trendingConsumedPageTokensRef.current,
-        fetchPage: (token) =>
-          fetchTrendingVideos(selectedCategory, requestRegion, token),
-        isCurrent: () =>
-          requestGeneration === trendingRequestGenerationRef.current &&
-          activeUserIdRef.current === requestUserId &&
-          selectedCountryRef.current === requestRegion,
-        allowRecentlySeen: isLoadingMore
-          ? trendingAllowRecentlySeen
-          : allowRecentlySeen,
-      });
-      if (!collection) return;
+      const eligibleVideos = rankTrendingVideos(
+        filterRecentVideos(
+          convertYouTubeVideos([...candidates.values()], countryCategories),
+          requestUserId,
+          displayedIds
+        ),
+        preferredTopics,
+        excludedTopics
+      ).slice(0, trendingPageSize);
 
-      if (isLoadingMore) {
-        setTrendingVideos((current) => {
-          const existingIds = new Set(current.map((video) => video.id));
-          return [
-            ...current,
-            ...collection.videos.filter((video) => {
-              if (existingIds.has(video.id)) return false;
-              existingIds.add(video.id);
-              return true;
-            }),
-          ];
-        });
-      } else {
-        setTrendingVideos(collection.videos);
+      if (eligibleVideos.length > 0) {
+        if (appendResults) {
+          setTrendingVideos((current) => {
+            const existingIds = new Set(current.map((video) => video.id));
+            return [
+              ...current,
+              ...eligibleVideos.filter((video) => {
+                if (existingIds.has(video.id)) return false;
+                existingIds.add(video.id);
+                return true;
+              }),
+            ];
+          });
+        } else if (failedRequests.length === 0 || trendingVideos.length === 0) {
+          setTrendingVideos(eligibleVideos);
+        } else {
+          setTrendingVideos((current) => {
+            const existingIds = new Set(current.map((video) => video.id));
+            return [
+              ...current,
+              ...eligibleVideos.filter((video) => {
+                if (existingIds.has(video.id)) return false;
+                existingIds.add(video.id);
+                return true;
+              }),
+            ];
+          });
+        }
       }
-      setTrendingNoNewVideos(
-        collection.receivedVideoCount > 0 && collection.videos.length === 0
-      );
 
-      if (collection.refillFailed) {
-        console.error('Could not refill YouTube Trending results:', collection.refillError);
+      if (failedRequests.length > 0) {
         setTrendingError(
-          collection.refillError instanceof Error
-            ? collection.refillError.message
-            : 'Could not load additional Trending videos.'
-        );
-      } else if (collection.repeatedPageToken) {
-        setTrendingError(
-          'YouTube repeated a Trending page token. Refresh the feed to continue.'
+          'Some Trending searches failed. Displayed videos are preserved; check your connection or YouTube API status, then retry.'
         );
       }
-      setTrendingNextPageToken(collection.nextPageToken);
     } catch (error) {
       if (requestGeneration === trendingRequestGenerationRef.current) {
-        if (pageToken) trendingConsumedPageTokensRef.current.delete(pageToken);
         console.error('YouTube Trending error:', error);
         setTrendingError(
           error instanceof Error
             ? error.message
-            : 'Could not load YouTube Trending videos.'
+            : 'Could not load Trending videos. Check your connection and retry.'
         );
       }
     } finally {
       if (requestGeneration === trendingRequestGenerationRef.current) {
-        if (isLoadingMore) {
+        if (appendResults) {
           trendingLoadingMoreLockRef.current = false;
           setTrendingLoadingMore(false);
         } else {
@@ -1690,13 +1802,7 @@ export default function Home() {
       trendingLoadingMoreLockRef.current
     ) return;
 
-    void requestTrendingVideos(
-      trendingCategoryRef.current,
-      undefined,
-      false,
-      false,
-      true
-    );
+    void requestTrendingVideos();
   };
 
   const changeSelectedCountry = (regionCode: string) => {
@@ -1751,39 +1857,19 @@ export default function Home() {
     setTrendingDisplayGeneration(trendingRequestGenerationRef.current);
     trendingLoadingMoreLockRef.current = false;
     trendingReplacementLockRef.current = false;
-    trendingConsumedPageTokensRef.current.clear();
     trendingInitialLoadStartedRef.current = false;
-    trendingCategoryRef.current = 'All categories';
-    setTrendingCategory('All categories');
     setTrendingVideos([]);
-    setTrendingNextPageToken(null);
-    setTrendingNoNewVideos(false);
-    setTrendingAllowRecentlySeen(false);
     setTrendingError('');
     setTrendingLoading(false);
     setTrendingLoadingMore(false);
   };
 
-  const showRecentTrendingVideos = () => {
-    void requestTrendingVideos(
-      trendingCategoryRef.current,
-      undefined,
-      false,
-      true,
-      true
-    );
-  };
-
   const loadMoreTrendingVideos = () => {
     if (
-      !trendingNextPageToken ||
       trendingLoadingMoreLockRef.current ||
       trendingReplacementLockRef.current
     ) return;
-    void requestTrendingVideos(
-      trendingCategoryRef.current,
-      trendingNextPageToken
-    );
+    void requestTrendingVideos(true);
   };
 
   const changeDiscoveryCategory = (selectedCategory: string) => {
@@ -1849,7 +1935,7 @@ export default function Home() {
         requestRegion,
         undefined,
         order,
-        normalizedTerm ? 30 : discoveryPageSize
+        discoveryPageSize
       );
 
       if (
@@ -1872,13 +1958,12 @@ export default function Home() {
             requestRegion,
             token,
             order,
-            normalizedTerm ? 30 : discoveryPageSize
+            discoveryPageSize
           ),
         isCurrent: () =>
           requestGeneration === videoRequestGenerationRef.current &&
           activeUserIdRef.current === requestUserId &&
           selectedCountryRef.current === requestRegion,
-        allowRecentlySeen: false,
       });
       if (!collection) return;
 
@@ -1949,7 +2034,7 @@ export default function Home() {
         requestRegion,
         requestPageToken,
         order,
-        searchTerm ? 30 : discoveryPageSize
+        discoveryPageSize
       );
       initialPageRequestSucceeded = true;
 
@@ -1973,13 +2058,12 @@ export default function Home() {
             requestRegion,
             token,
             order,
-            searchTerm ? 30 : discoveryPageSize
+            discoveryPageSize
           ),
         isCurrent: () =>
           requestGeneration === videoRequestGenerationRef.current &&
           activeUserIdRef.current === requestUserId &&
           selectedCountryRef.current === requestRegion,
-        allowRecentlySeen: false,
       });
       if (!collection) return;
 
@@ -2060,9 +2144,7 @@ export default function Home() {
     ) return;
 
     trendingInitialLoadStartedRef.current = true;
-    trendingCategoryRef.current = 'All categories';
-    setTrendingCategory('All categories');
-    void requestTrendingVideos('All categories');
+    void requestTrendingVideos();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     authIdentityReady,
@@ -2096,26 +2178,6 @@ export default function Home() {
         : sortedVideos;
     },
     [category, date, duration, excludedTopics, liveVideos, preferredTopics, sort]
-  );
-  const filteredTrending = useMemo(
-    () => filterAndSortVideos(trendingVideos, {
-      category: trendingCategory,
-      duration: trendingDuration,
-      date: trendingDate,
-      sort: trendingSort,
-      preferredTopics,
-      excludedTopics,
-      preservePopularityOrder: true,
-    }),
-    [
-      excludedTopics,
-      preferredTopics,
-      trendingCategory,
-      trendingDate,
-      trendingDuration,
-      trendingSort,
-      trendingVideos,
-    ]
   );
 
   const handleDiscoveryVideoDisplayed = useCallback(
@@ -2286,14 +2348,6 @@ export default function Home() {
     setSort('Best match');
     setQuery('');
     void performSearch('', 'All categories', getActiveDiscoveryQuery(), true);
-  };
-  const clearTrendingFilters = () => {
-    trendingCategoryRef.current = 'All categories';
-    setTrendingCategory('All categories');
-    setTrendingDuration('Any length');
-    setTrendingDate('Any time');
-    setTrendingSort('Most popular');
-    void requestTrendingVideos('All categories', undefined, false, false, true);
   };
   const refreshFeed = () => {
     if (discoveryReplacementLockRef.current || loadingMoreLockRef.current) return;
@@ -2551,7 +2605,7 @@ export default function Home() {
         <div className="section-head results-head">
           <h2>Trending now</h2>
           <span className="result-count">
-            {filteredTrending.length} {filteredTrending.length === 1 ? 'video' : 'videos'}
+            {trendingVideos.length} {trendingVideos.length === 1 ? 'video' : 'videos'}
           </span>
           <button
             className="clear"
@@ -2560,50 +2614,15 @@ export default function Home() {
           >
             Refresh Trending
           </button>
-          <button className="clear" onClick={clearTrendingFilters}>
-            Clear filters
-          </button>
         </div>
-        <FeedFilterControls
-          id="trending-filters"
-          categories={countryCategories}
-          category={trendingCategory}
-          duration={trendingDuration}
-          date={trendingDate}
-          sort={trendingSort}
-          onCategoryChange={(selectedCategory) => {
-            trendingCategoryRef.current = selectedCategory;
-            setTrendingCategory(selectedCategory);
-            void requestTrendingVideos(
-              selectedCategory,
-              undefined,
-              false,
-              false,
-              true
-            );
-          }}
-          onDurationChange={setTrendingDuration}
-          onDateChange={setTrendingDate}
-          onSortChange={setTrendingSort}
-        />
-        <CategoryStatus
-          loading={categoriesLoading}
-          error={categoriesError}
-          onRetry={() => {
-            if (selectedCountryCode) {
-              void loadCountryCategories(selectedCountryCode);
-            }
-          }}
-        />
         <p className="preview-note">
-          Filters apply to loaded videos. “Most popular” preserves YouTube’s chart order; “Best match” ranks by video metadata and your topics.
-          {selectedCountryCode
-            ? ' Categories are specific to the selected region.'
-            : ''}
+          Popularity estimates use current views, likes and comments plus
+          lifetime views per day as an age-adjusted proxy, not measured growth.
+          Historical growth snapshots are not collected yet.
         </p>
         {trendingLoading && trendingVideos.length === 0 && (
           <p role="status" className="preview-note">
-            Loading popular YouTube videos for{' '}
+            Finding videos for{' '}
             {supportedRegions.find((region) => region.code === selectedCountryCode)
               ?.name ?? selectedCountryCode}
             …
@@ -2622,7 +2641,7 @@ export default function Home() {
           </p>
         )}
         <div className="video-grid">
-          {filteredTrending.map((video) => (
+          {trendingVideos.map((video) => (
             <VideoCard
               key={`${selectedCountryCode}:${video.id}`}
               video={video}
@@ -2634,58 +2653,15 @@ export default function Home() {
             />
           ))}
         </div>
-        {trendingNextPageToken && (
-          <div className="load-more-wrap">
-            <button
-              className="secondary-button"
-              onClick={loadMoreTrendingVideos}
-              disabled={trendingLoadingMore || trendingLoading}
-            >
-              {trendingLoadingMore ? 'Loading videos…' : 'Load more'}
-            </button>
-          </div>
-        )}
-        {trendingNoNewVideos && !trendingError && (
-          <div className="empty">
-            <p>
-              This YouTube chart page contained no new videos. Its results were
-              recently shown or already loaded.
-              {trendingNextPageToken
-                ? ' Load more to continue through the chart.'
-                : ' There are no more chart pages to load.'}
-            </p>
-            <button
-              className="clear"
-              onClick={showRecentTrendingVideos}
-              disabled={trendingLoading || trendingLoadingMore}
-            >
-              {trendingLoading || trendingLoadingMore
-                ? 'Loading chart results…'
-                : 'Show chart results again'}
-            </button>
-          </div>
-        )}
-        {filteredTrending.length === 0 &&
-          !trendingLoading &&
-          !trendingError &&
-          !trendingNoNewVideos && (
-            <div className="empty">
-              <p>
-                {trendingVideos.length > 0
-                  ? 'No loaded Trending videos match these filters. Load more or adjust the filters.'
-                  : `YouTube returned no popular videos for ${supportedRegions.find((region) => region.code === selectedCountryCode)?.name ?? selectedCountryCode}${trendingCategory !== 'All categories' ? ' in this category' : ''}.`}
-              </p>
-              {trendingVideos.length === 0 && (
-                <button
-                  className="clear"
-                  onClick={refreshTrending}
-                  disabled={trendingLoading || trendingLoadingMore}
-                >
-                  {trendingLoading || trendingLoadingMore ? 'Loading…' : 'Try again'}
-                </button>
-              )}
-            </div>
-          )}
+        <div className="load-more-wrap">
+          <button
+            className="secondary-button"
+            onClick={loadMoreTrendingVideos}
+            disabled={trendingLoadingMore || trendingLoading}
+          >
+            {trendingLoadingMore ? 'Finding more videos…' : 'Load more'}
+          </button>
+        </div>
       </section>
       <section className="trending" id="discover-feed">
         <div className="section-kicker"><i /> CURATED FOR DISCOVERY</div>
